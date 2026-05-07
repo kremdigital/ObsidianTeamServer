@@ -4,6 +4,47 @@
 
 ---
 
+## 2026-05-08
+
+- **[2026-05-08] Этапы 12 и 13 ЗАВЕРШЕНЫ.** Деплой-артефакты + установочные скрипты. Все проверки чисты:
+  - `format:check` / `typecheck` / `lint` — 0 проблем.
+  - `pnpm test` — **48/48** unit. `test:integration` — **58/58**.
+  - Все 3 shell-скрипта проходят `bash -n` (синтаксис валиден). shellcheck недоступен в Git Bash, проверка будет на CI/деплое.
+
+- **[2026-05-08] Этап 13 — Артефакты для деплоя.**
+  - `config/Caddyfile.example` — единый сайт-блок: gzip+zstd, `/socket.io/*` → :3001, всё остальное → :3000, rate-limit на auth-эндпоинтах (60/мин/IP), `request_body max_size 50MB`, JSON-access-log с rolling (100MB / 14 файлов). Поле `{$DOMAIN}` подставляется через `envsubst` в `install.sh`.
+  - `ecosystem.config.cjs` (CommonJS — PM2 требует) — два процесса: `obsidian-sync-web` (Next start :3000) и `obsidian-sync-socket` (`dist/socket/server.mjs`). У socket — `kill_timeout: 10000` (graceful shutdown сохранит pending Yjs-state). У обоих — `OSYNC_PROCESS=web|socket` для разделения файлов логов.
+  - `tsup.config.ts` — собирает socket-процесс в `dist/socket/server.mjs` (ESM, Node 20, sourcemap). External: `@prisma/client`, `@prisma/adapter-pg`, `pg`, `bcryptjs`. Banner с `createRequire(import.meta.url)` shim'ом — иначе CommonJS-style `require()` внутри транспилированных deps падает с `Dynamic require of "fs" is not supported`.
+  - `package.json` scripts: `dev` (concurrently web+socket с цветными префиксами), `dev:socket` (`tsx watch`), `build` (next build + build:socket), `build:socket` (tsup), `start` / `stop` (через PM2).
+  - **Smoke-проверка билда:** `node --input-type=module -e "import('./dist/socket/server.mjs')"` загружает модуль без ошибок.
+
+- **[2026-05-08] Этап 12 — Скрипты установки/обновления/удаления.**
+  - `scripts/install.sh` — идемпотентный installer для Ubuntu 22.04+ / Debian 12+. 19 шагов:
+    1. `require_root` + `detect_os` (через /etc/os-release)
+    2. apt: curl/git/build-essential/gnupg/lsb-release/...
+    3. NodeSource Node.js ≥20 LTS
+    4. pnpm @latest через npm
+    5. PostgreSQL 16 (PGDG repo) + создание роли/БД (idempotent — переиспользует пароль из существующего .env)
+    6. Caddy stable из cloudsmith
+    7. systemd user `obsidian` + директории `${INSTALL_DIR=/opt/obsidian-sync}` / `${LOG_DIR=/var/log/obsidian-sync}` / `${STORAGE_DIR=/var/lib/obsidian-sync}`
+    8. **Интерактивные prompts** (или env vars в `NON_INTERACTIVE=1` режиме): DOMAIN, ADMIN*EMAIL, ADMIN_PASSWORD, OPEN_REGISTRATION, SMTP*\*
+    9. Clone репо (REPO_URL) или копирование локального чекаута через rsync
+    10. `pnpm install --frozen-lockfile`
+    11. **`.env`-генерация** с `openssl rand -base64 64` для JWT_SECRET / JWT_REFRESH_SECRET; при существующем `.env` — refresh user-facing полей с сохранением секретов
+    12. `prisma generate` + `migrate deploy` + `seed.ts`
+    13. `pnpm build` (next build + tsup socket)
+    14. PM2 install (если нет) + `pm2 startOrReload` + `pm2 save` + `pm2 startup systemd`
+    15. envsubst Caddyfile → /etc/caddy/Caddyfile + reload caddy
+    16. итоговый summary
+  - `scripts/uninstall.sh` — с подтверждениями. Флаги `--drop-db` / `--drop-storage` / `--yes`. По умолчанию **сохраняет** `${STORAGE_DIR}` и БД (data preservation principle). Чистит PM2, Caddyfile, app dir, логи, опционально service user.
+  - `scripts/upgrade.sh` — `git pull --ff-only`, `pnpm install --frozen-lockfile`, `prisma migrate deploy`, `pnpm build`, `pm2 reload --update-env` (zero-downtime).
+
+- **[2026-05-08] eslint config + cleanup.** В `globalIgnores` добавлено `dist/**` (артефакты tsup). `.prettierignore` уже содержал `dist`.
+
+- **[2026-05-08] dev-сервер остановлен** перед изменениями stack'а сборки.
+
+---
+
 ## 2026-05-06
 
 - **[2026-05-06] Этап 11 ЗАВЕРШЁН.** Логирование (pino + ротация + audit). Все проверки чисты:
