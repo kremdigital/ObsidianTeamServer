@@ -6,6 +6,23 @@
 
 ## 2026-05-08
 
+- **[2026-05-08] Этап 14 ЗАВЕРШЁН — серверная часть готова.** Документация и финальная зачистка. Все проверки чисты:
+  - `format:check` / `typecheck` / `lint` — 0 проблем.
+  - `pnpm test` — **48/48** unit. `test:integration` — **58/58**.
+  - `pnpm test:e2e` — **19/19** (smoke + auth × 3 + ui × 3 + api-keys × 1 + projects × 3 + files × 4 + admin × 4).
+
+- **[2026-05-08] 14.1 — `README.md` сервера** полностью переписан под продакшн: оглавление, быстрая установка через `install.sh`, ручная установка, таблица переменных окружения, операционные команды (PM2 / pino / Caddy), раздел разработки со всеми скриптами, тестовая стратегия, troubleshooting (Caddy/PG/SMTP/socket).
+
+- **[2026-05-08] 14.2 — `docs/architecture.md`.** ASCII-диаграмма процессов (Caddy → web/socket → PG + FS), потоки данных (auth, file ops, CRDT round-trip), обзор схемы БД (16 моделей + 4 enum, каскады, уникальные индексы), структура хранилища, уровни авторизации (cookie + X-API-Key), permission-хелперы, vector clock и резолюция конфликтов, структура логирования, тестовая стратегия (пирамида unit → integration → e2e).
+
+- **[2026-05-08] 14.3 — `docs/api.md`.** Все REST-эндпоинты с одной таблицей на группу: auth, api-keys, projects, members, project invitations, files, admin. Единый формат ошибок. Socket.IO события (client→server и server→client broadcast) с типизированным `outcome`. cURL-примеры для регистрации/верификации/входа, создания API-ключа, multipart upload через X-API-Key. TS-пример Socket.IO клиента.
+
+- **[2026-05-08] 14.4 — `docs/sync-protocol.md`.** Протокол для разработчика плагина: идентификаторы (clientId/fileId/projectId), vector clock с примерами кода, формат `project:join`, типы операций и payload'ов, **все три случая резолюции конфликтов** с примерами (CREATE-collision, DELETE > UPDATE, concurrent RENAME), Yjs lifecycle с диаграммой client/server/peer, восстановление при реконнекте, бинарные файлы, рекомендации по offline-журналу в SQLite.
+
+- **[2026-05-08] 14.5 — `CONTRIBUTING.md`.** Локальная разработка, перед PR (format/lint/typecheck/test:all/test:e2e), стиль кода (TS strict + Prettier + ESLint), Conventional Commits с таблицей типов и примерами, правила тестирования (когда тесты обязательны), миграции БД, pre-commit hooks, формат PR, security policy.
+
+- **[2026-05-08] 14.6 — `CHANGELOG.md`** в формате Keep a Changelog. Раздел `[Unreleased]` со всем добавленным за этапы 0–13: auth, projects, files, CRDT, sync, socket, admin, logging, deploy. Краткий блок tech stack с версиями.
+
 - **[2026-05-08] Этапы 12 и 13 ЗАВЕРШЕНЫ.** Деплой-артефакты + установочные скрипты. Все проверки чисты:
   - `format:check` / `typecheck` / `lint` — 0 проблем.
   - `pnpm test` — **48/48** unit. `test:integration` — **58/58**.
