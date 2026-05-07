@@ -25,6 +25,8 @@ const eslintConfig = defineConfig([
     'out/**',
     'build/**',
     'next-env.d.ts',
+    // Bundled output of `pnpm build:socket` (tsup).
+    'dist/**',
   ]),
 ]);
 

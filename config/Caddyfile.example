@@ -1,0 +1,47 @@
+# Caddy configuration for Obsidian Sync.
+#
+# This file is templated by `scripts/install.sh` — the {$DOMAIN} placeholder is
+# substituted with the user-provided host before being copied to /etc/caddy/Caddyfile.
+# You can also use this file directly with `caddy run --config Caddyfile`
+# after exporting `DOMAIN`.
+
+{$DOMAIN} {
+    encode gzip zstd
+
+    # Socket.IO traffic (websocket + long-polling) — proxy raw to the socket process.
+    # Caddy auto-detects and upgrades the websocket connection.
+    handle /socket.io/* {
+        reverse_proxy localhost:3001
+    }
+
+    # Everything else — Next.js web process.
+    handle {
+        reverse_proxy localhost:3000 {
+            # Pass through cookies and the real client IP for our session/auth code.
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # Slow-down basic abuse on auth endpoints (60 requests / minute / IP).
+    @auth path /api/auth/login /api/auth/register /api/auth/forgot-password
+    rate_limit @auth {
+        zone auth_zone {
+            key {remote_host}
+            events 60
+            window 1m
+        }
+    }
+
+    # Increase the body size for file uploads (default: 10MB). Adjust if you raise MAX_FILE_SIZE.
+    request_body {
+        max_size 50MB
+    }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 100mb
+            roll_keep 14
+        }
+        format json
+    }
+}
