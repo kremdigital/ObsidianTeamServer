@@ -1,0 +1,325 @@
+// Obsidian Sync — Prisma schema
+// Документация: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =====================================================================
+// ENUMS
+// =====================================================================
+
+enum UserRole {
+  USER
+  SUPERADMIN
+}
+
+enum ProjectRole {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum FileType {
+  TEXT
+  BINARY
+}
+
+enum OpType {
+  CREATE
+  UPDATE
+  DELETE
+  RENAME
+  MOVE
+}
+
+// =====================================================================
+// USER & AUTH
+// =====================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  role          UserRole  @default(USER)
+  emailVerified DateTime?
+  disabledAt    DateTime?
+  language      String    @default("ru")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Auth tokens — каскадно удаляются с пользователем.
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  refreshTokens           RefreshToken[]
+  apiKeys                 ApiKey[]
+
+  // Проекты, которыми владеет.
+  ownedProjects Project[] @relation("ProjectOwner")
+
+  // Участие в проектах.
+  memberships ProjectMember[] @relation("MemberUser")
+  addedBy     ProjectMember[] @relation("MemberAddedBy")
+
+  // Приглашения, которые отправлял / принял.
+  sentProjectInvitations     ProjectInvitation[] @relation("ProjectInviter")
+  acceptedProjectInvitations ProjectInvitation[] @relation("ProjectInviteAcceptor")
+  sentServerInvitations      ServerInvitation[]  @relation("ServerInviter")
+
+  // Файлы, которые модифицировал последним.
+  lastModifiedFiles VaultFile[] @relation("FileLastModifier")
+
+  // История версий и операции.
+  fileVersions FileVersion[]
+  operations   OperationLog[]
+
+  // Аудит-записи (опционально привязаны к пользователю).
+  auditLogs AuditLog[]
+
+  @@index([email])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  keyHash    String    @unique
+  keyPrefix  String
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([keyPrefix])
+}
+
+// =====================================================================
+// PROJECT & MEMBERSHIP
+// =====================================================================
+
+model Project {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  iconEmoji   String?
+  ownerId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner       User                @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members     ProjectMember[]
+  invitations ProjectInvitation[]
+  files       VaultFile[]
+  operations  OperationLog[]
+
+  @@index([ownerId])
+}
+
+model ProjectMember {
+  id        String      @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProjectRole @default(VIEWER)
+  addedAt   DateTime    @default(now())
+  addedById String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation("MemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  addedBy User?   @relation("MemberAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model ProjectInvitation {
+  id             String    @id @default(cuid())
+  projectId      String
+  email          String?
+  role           ProjectRole
+  token          String    @unique
+  invitedById    String?
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  acceptedById   String?
+  createdAt      DateTime  @default(now())
+
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invitedBy  User?   @relation("ProjectInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  acceptedBy User?   @relation("ProjectInviteAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([email])
+}
+
+model ServerInvitation {
+  id          String    @id @default(cuid())
+  email       String
+  token       String    @unique
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  invitedBy User @relation("ServerInviter", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([email])
+}
+
+// =====================================================================
+// VAULT FILES & VERSIONING
+// =====================================================================
+
+model VaultFile {
+  id                 String    @id @default(cuid())
+  projectId          String
+  path               String
+  fileType           FileType
+  contentHash        String
+  size               BigInt
+  mimeType           String?
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  lastModifiedById   String?
+
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lastModifiedBy User?         @relation("FileLastModifier", fields: [lastModifiedById], references: [id], onDelete: SetNull)
+  yjsDocument    YjsDocument?
+  versions       FileVersion[]
+
+  @@unique([projectId, path])
+  @@index([projectId])
+  @@index([contentHash])
+}
+
+model YjsDocument {
+  id          String   @id @default(cuid())
+  fileId      String   @unique
+  state       Bytes
+  stateVector Bytes
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  file VaultFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+}
+
+model FileVersion {
+  id            String   @id @default(cuid())
+  fileId        String
+  versionNumber Int
+  contentHash   String
+  snapshotPath  String
+  authorId      String?
+  message       String?
+  createdAt     DateTime @default(now())
+
+  file   VaultFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  author User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([fileId, versionNumber])
+  @@index([fileId])
+}
+
+// =====================================================================
+// OPERATIONS LOG (sync metadata)
+// =====================================================================
+
+model OperationLog {
+  id           String   @id @default(cuid())
+  projectId    String
+  opType       OpType
+  filePath     String
+  newPath      String?
+  authorId     String?
+  vectorClock  Json
+  payload      Json
+  createdAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author  User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([authorId])
+}
+
+// =====================================================================
+// AUDIT
+// =====================================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// =====================================================================
+// SERVER CONFIG (key-value store for runtime settings)
+// =====================================================================
+
+model ServerConfig {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

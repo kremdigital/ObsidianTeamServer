@@ -1,0 +1,311 @@
+{
+  "common": {
+    "appName": "Obsidian Sync",
+    "loading": "Загрузка…",
+    "submit": "Отправить",
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "delete": "Удалить",
+    "confirm": "Подтвердить",
+    "back": "Назад",
+    "next": "Дальше",
+    "tryAgain": "Попробовать ещё раз",
+    "unknownError": "Что-то пошло не так. Попробуйте позже."
+  },
+  "nav": {
+    "dashboard": "Проекты",
+    "profile": "Профиль",
+    "apiKeys": "API-ключи",
+    "notifications": "Уведомления",
+    "admin": "Админка",
+    "logout": "Выйти"
+  },
+  "auth": {
+    "login": {
+      "title": "Вход",
+      "subtitle": "Введите email и пароль",
+      "email": "Email",
+      "password": "Пароль",
+      "submit": "Войти",
+      "forgotPassword": "Забыли пароль?",
+      "noAccount": "Нет аккаунта?",
+      "register": "Зарегистрироваться",
+      "invalidCredentials": "Неверный email или пароль"
+    },
+    "register": {
+      "title": "Регистрация",
+      "subtitle": "Создайте новый аккаунт",
+      "email": "Email",
+      "password": "Пароль",
+      "name": "Имя",
+      "submit": "Зарегистрироваться",
+      "haveAccount": "Уже есть аккаунт?",
+      "loginLink": "Войти",
+      "closed": "Регистрация закрыта. Требуется приглашение.",
+      "successTitle": "Проверьте почту",
+      "successText": "Мы отправили письмо со ссылкой для подтверждения email на {email}.",
+      "emailTaken": "Этот email уже зарегистрирован"
+    },
+    "forgotPassword": {
+      "title": "Забыли пароль?",
+      "subtitle": "Введите email — мы отправим ссылку для сброса.",
+      "email": "Email",
+      "submit": "Отправить ссылку",
+      "successTitle": "Если email зарегистрирован — мы отправили ссылку",
+      "successText": "Проверьте почту: ссылка действительна 1 час.",
+      "backToLogin": "Вернуться ко входу"
+    },
+    "resetPassword": {
+      "title": "Новый пароль",
+      "subtitle": "Введите новый пароль для аккаунта.",
+      "password": "Новый пароль",
+      "submit": "Сохранить пароль",
+      "invalidToken": "Ссылка недействительна или истекла. Запросите новую.",
+      "successTitle": "Пароль изменён",
+      "successText": "Теперь вы можете войти с новым паролем.",
+      "loginLink": "Войти"
+    },
+    "verifyEmail": {
+      "verifying": "Проверяем ссылку…",
+      "successTitle": "Email подтверждён",
+      "successText": "Теперь вы можете войти.",
+      "errorTitle": "Не удалось подтвердить",
+      "errorText": "Ссылка недействительна или истекла.",
+      "loginLink": "Войти"
+    },
+    "invite": {
+      "title": "Приглашение",
+      "loading": "Проверяем приглашение…",
+      "invalid": "Приглашение недействительно или истекло."
+    }
+  },
+  "dashboard": {
+    "title": "Мои проекты",
+    "createProject": "Новый проект",
+    "empty": {
+      "title": "Здесь пока пусто",
+      "text": "Создайте первый проект, чтобы начать синхронизировать хранилище."
+    },
+    "owner": "Владелец",
+    "memberCount": "Участников: {count}",
+    "fileCount": "Файлов: {count}"
+  },
+  "project": {
+    "settings": "Настройки",
+    "membersTitle": "Участники",
+    "addMember": "Добавить",
+    "addMemberEmail": "Email пользователя",
+    "addMemberRole": "Роль",
+    "removeMember": "Удалить",
+    "owner": "владелец",
+    "invitationsTitle": "Активные приглашения",
+    "inviteByEmail": "Пригласить по email",
+    "inviteByLink": "Создать ссылку",
+    "copyLink": "Скопировать",
+    "copied": "Скопировано",
+    "revokeInvite": "Отозвать",
+    "metadataTitle": "Информация о проекте",
+    "name": "Название",
+    "description": "Описание",
+    "iconEmoji": "Иконка (эмодзи)",
+    "save": "Сохранить",
+    "deleteProject": "Удалить проект",
+    "deleteDialog": {
+      "title": "Удалить проект «{name}»?",
+      "description": "Все файлы, история версий и приглашения будут удалены. Это необратимо.",
+      "confirm": "Удалить"
+    },
+    "createDialog": {
+      "title": "Новый проект",
+      "name": "Название",
+      "description": "Описание",
+      "iconEmoji": "Иконка (опционально)",
+      "submit": "Создать"
+    },
+    "emptyMembers": "Кроме вас никого нет — пригласите участников.",
+    "emptyInvitations": "Нет активных приглашений.",
+    "savedToast": "Сохранено",
+    "removedToast": "Участник удалён",
+    "invitedToast": "Приглашение отправлено",
+    "linkCreatedToast": "Ссылка создана"
+  },
+  "admin": {
+    "title": "Админка",
+    "nav": {
+      "users": "Пользователи",
+      "projects": "Проекты",
+      "invitations": "Приглашения",
+      "settings": "Настройки сервера",
+      "auditLog": "Журнал действий"
+    },
+    "users": {
+      "title": "Пользователи",
+      "search": "Поиск по email или имени",
+      "create": "Создать пользователя",
+      "table": {
+        "name": "Имя",
+        "email": "Email",
+        "role": "Роль",
+        "verified": "Email",
+        "disabled": "Статус",
+        "created": "Создан"
+      },
+      "verify": "Верифицировать email",
+      "block": "Заблокировать",
+      "unblock": "Разблокировать",
+      "delete": "Удалить",
+      "active": "активен",
+      "blocked": "заблокирован",
+      "createDialog": {
+        "title": "Создать пользователя",
+        "name": "Имя",
+        "email": "Email",
+        "password": "Пароль",
+        "role": "Роль",
+        "submit": "Создать"
+      },
+      "deleteDialog": {
+        "title": "Удалить пользователя?",
+        "description": "Это действие необратимо."
+      }
+    },
+    "userDetail": {
+      "back": "← Список",
+      "auditTitle": "История действий",
+      "noAudit": "Действий не зафиксировано",
+      "stats": "Статистика",
+      "ownedProjects": "Проектов в собственности",
+      "memberships": "Участий в проектах",
+      "apiKeys": "API-ключей"
+    },
+    "projects": {
+      "title": "Все проекты",
+      "search": "Поиск по названию или slug",
+      "table": {
+        "name": "Название",
+        "owner": "Владелец",
+        "members": "Участников",
+        "files": "Файлов",
+        "created": "Создан"
+      }
+    },
+    "invitations": {
+      "title": "Приглашения на сервер",
+      "create": "Пригласить",
+      "email": "Email",
+      "table": {
+        "email": "Email",
+        "invitedBy": "Кто пригласил",
+        "expires": "Истекает",
+        "created": "Создано"
+      },
+      "revoke": "Отозвать",
+      "copyLink": "Скопировать",
+      "copied": "Скопировано"
+    },
+    "settings": {
+      "title": "Настройки сервера",
+      "openRegistration": "Открытая регистрация",
+      "openRegistrationDescription": "Если включено — любой может зарегистрироваться без приглашения.",
+      "smtpEnabled": "SMTP включён",
+      "smtpEnabledDescription": "Отметьте после настройки SMTP в .env (HOST/USER/PASSWORD).",
+      "defaultUserRole": "Роль по умолчанию",
+      "publicUrl": "Публичный URL",
+      "publicUrlDescription": "Используется для генерации ссылок в письмах.",
+      "save": "Сохранить",
+      "saved": "Сохранено"
+    },
+    "auditLog": {
+      "title": "Журнал действий",
+      "filterUser": "ID пользователя",
+      "filterAction": "Действие (содержит)",
+      "filterEntity": "Тип сущности",
+      "filterFrom": "С",
+      "filterTo": "По",
+      "apply": "Применить",
+      "reset": "Сбросить",
+      "table": {
+        "when": "Время",
+        "user": "Пользователь",
+        "action": "Действие",
+        "entity": "Сущность",
+        "ip": "IP"
+      },
+      "empty": "Записей нет"
+    }
+  },
+  "invitePage": {
+    "loading": "Проверяем приглашение…",
+    "invalid": "Приглашение недействительно или истекло.",
+    "projectTitle": "Приглашение в проект «{name}»",
+    "projectText": "Вы получаете роль: {role}.",
+    "loginRequired": "Для принятия приглашения нужно войти.",
+    "wrongEmail": "Это приглашение для {email}. Войдите в нужный аккаунт.",
+    "accept": "Принять приглашение",
+    "alreadyMember": "Вы уже участник этого проекта",
+    "accepted": "Приглашение принято",
+    "openProject": "Перейти к проекту"
+  },
+  "profile": {
+    "title": "Профиль",
+    "name": "Имя",
+    "email": "Email",
+    "language": "Язык",
+    "changePassword": "Сменить пароль",
+    "saved": "Изменения сохранены"
+  },
+  "apiKeys": {
+    "title": "API-ключи",
+    "subtitle": "Используются плагином Obsidian для подключения к серверу.",
+    "createButton": "Создать ключ",
+    "empty": {
+      "title": "Ключей пока нет",
+      "text": "Создайте первый ключ, чтобы подключить плагин Obsidian."
+    },
+    "table": {
+      "name": "Название",
+      "prefix": "Префикс",
+      "lastUsed": "Использован",
+      "created": "Создан",
+      "expires": "Истекает",
+      "never": "никогда",
+      "delete": "Удалить"
+    },
+    "createDialog": {
+      "title": "Новый API-ключ",
+      "description": "Дайте ключу понятное имя, например: «Ноутбук», «Рабочий компьютер».",
+      "nameLabel": "Название",
+      "submit": "Создать"
+    },
+    "createdDialog": {
+      "title": "Ключ создан",
+      "warning": "Скопируйте ключ сейчас — он показан один раз и больше не будет доступен.",
+      "copy": "Скопировать",
+      "copied": "Скопировано",
+      "close": "Готово"
+    },
+    "deleteDialog": {
+      "title": "Удалить ключ?",
+      "description": "Подключения, использующие этот ключ, перестанут работать.",
+      "confirm": "Удалить"
+    },
+    "toasts": {
+      "deleted": "Ключ удалён",
+      "createFailed": "Не удалось создать ключ",
+      "deleteFailed": "Не удалось удалить ключ"
+    }
+  },
+  "notifications": {
+    "title": "Уведомления",
+    "soon": "Раздел появится после внедрения приглашений в проекты."
+  },
+  "validation": {
+    "required": "Заполните это поле",
+    "email": "Некорректный email",
+    "passwordMin": "Пароль должен быть не короче 8 символов"
+  },
+  "errors": {
+    "validationFailed": "Проверьте поля формы",
+    "networkError": "Сетевая ошибка. Проверьте соединение."
+  }
+}
