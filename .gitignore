@@ -49,3 +49,9 @@ next-env.d.ts
 /test-results
 /playwright-report
 /playwright/.cache
+
+# editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
