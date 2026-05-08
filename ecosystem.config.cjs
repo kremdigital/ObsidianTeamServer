@@ -41,7 +41,7 @@ module.exports = {
     },
     {
       name: 'obsidian-sync-socket',
-      script: 'dist/socket/server.mjs',
+      script: 'dist/socket/main.mjs',
       cwd: __dirname,
       instances: 1,
       exec_mode: 'fork',

@@ -8,7 +8,10 @@ import { defineConfig } from 'tsup';
  * lib/crdt, lib/files, lib/logger, …).
  */
 export default defineConfig({
-  entry: { 'socket/server': 'src/socket/server.ts' },
+  entry: {
+    'socket/server': 'src/socket/server.ts',
+    'socket/main': 'src/socket/main.ts',
+  },
   outDir: 'dist',
   // Emit as ESM with .mjs extension so Node treats it as ESM regardless of
   // the package.json `type` field (which we keep as the implicit "commonjs"

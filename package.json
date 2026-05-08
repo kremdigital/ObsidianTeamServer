@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -n web,socket -c blue,green \"pnpm:dev:web\" \"pnpm:dev:socket\"",
     "dev:web": "next dev",
-    "dev:socket": "tsx watch src/socket/server.ts",
+    "dev:socket": "tsx watch src/socket/main.ts",
     "build": "next build && pnpm build:socket",
     "build:socket": "tsup",
     "start": "pm2 start ecosystem.config.cjs",

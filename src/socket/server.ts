@@ -93,8 +93,7 @@ export async function runStandaloneServer(opts: RunServerOptions = {}): Promise<
   };
 }
 
-// When run directly (`tsx src/socket/server.ts` or compiled), start listening.
-const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`;
-if (isMain) {
-  void runStandaloneServer();
-}
+// Note: This file does NOT auto-start a server when imported. To run a
+// standalone Socket.IO process, use `src/socket/main.ts` as the entry point.
+// That keeps `createIoServer` / `runStandaloneServer` safely importable from
+// tests and other tooling.
