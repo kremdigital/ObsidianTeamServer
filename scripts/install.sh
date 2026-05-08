@@ -86,12 +86,22 @@ install_node() {
 }
 
 install_pnpm() {
+  # Pin to pnpm@10: pnpm@11+ requires Node ≥ 22.13, but we install Node 20 LTS.
+  local desired_major="10"
+  local current=""
   if command -v pnpm >/dev/null 2>&1; then
-    ok "pnpm $(pnpm -v) already installed"
+    current="$(pnpm -v 2>/dev/null || true)"
+  fi
+  if [[ "${current%%.*}" = "${desired_major}" ]]; then
+    ok "pnpm ${current} already installed"
     return
   fi
-  log "Installing pnpm via npm..."
-  npm install -g pnpm@latest
+  if [[ -n "${current}" ]]; then
+    warn "Re-installing pnpm: have ${current}, need ${desired_major}.x"
+  else
+    log "Installing pnpm@${desired_major}..."
+  fi
+  npm install -g "pnpm@${desired_major}"
   ok "pnpm $(pnpm -v) installed"
 }
 
