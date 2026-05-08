@@ -174,13 +174,19 @@ ensure_service_user() {
 
 # ---- Interactive prompts ----------------------------------------------------
 prompt_input() {
-  local var_name="$1" prompt="$2" default="${3:-}" silent="${4:-}"
+  local var_name="$1" prompt="$2" silent="${4:-}"
+  # Track whether a default was passed at all — empty string is a valid default.
+  local has_default="no" default=""
+  if [[ "${3+set}" == "set" ]]; then
+    has_default="yes"
+    default="$3"
+  fi
   local current="${!var_name:-}"
   if [[ -n "${current}" ]]; then
     return  # already set via env / prior call
   fi
   if [[ "${NON_INTERACTIVE:-0}" = "1" ]]; then
-    if [[ -n "${default}" ]]; then
+    if [[ "${has_default}" = "yes" ]]; then
       printf -v "${var_name}" '%s' "${default}"
       return
     fi
