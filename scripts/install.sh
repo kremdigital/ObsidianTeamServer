@@ -446,8 +446,10 @@ main() {
   clone_or_update_repo
   install_app
   generate_env
-  build_app
+  # `prisma generate` must run before `next build` — Next type-checks seed.ts
+  # which imports from @prisma/client.
   run_migrations
+  build_app
   install_pm2
   start_services
   configure_caddy
