@@ -1,34 +1,27 @@
 # Caddy configuration for Obsidian Sync.
 #
-# This file is templated by `scripts/install.sh` — the {$DOMAIN} placeholder is
-# substituted with the user-provided host before being copied to /etc/caddy/Caddyfile.
-# You can also use this file directly with `caddy run --config Caddyfile`
-# after exporting `DOMAIN`.
+# This file is templated by `scripts/install.sh`: ${DOMAIN}, ${PORT_WEB} and
+# ${PORT_SOCKET} are substituted via `envsubst` before the file is copied to
+# /etc/caddy/Caddyfile.
+#
+# The `{remote_host}` placeholders below are *Caddy* placeholders (resolved at
+# request time) — they intentionally pass through envsubst unchanged because
+# envsubst only expands `$VAR` / `${VAR}`.
 
-{$DOMAIN} {
+${DOMAIN} {
     encode gzip zstd
 
     # Socket.IO traffic (websocket + long-polling) — proxy raw to the socket process.
     # Caddy auto-detects and upgrades the websocket connection.
     handle /socket.io/* {
-        reverse_proxy localhost:3001
+        reverse_proxy localhost:${PORT_SOCKET}
     }
 
     # Everything else — Next.js web process.
     handle {
-        reverse_proxy localhost:3000 {
-            # Pass through cookies and the real client IP for our session/auth code.
+        reverse_proxy localhost:${PORT_WEB} {
+            # Pass through the real client IP for our session/auth code.
             header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # Slow-down basic abuse on auth endpoints (60 requests / minute / IP).
-    @auth path /api/auth/login /api/auth/register /api/auth/forgot-password
-    rate_limit @auth {
-        zone auth_zone {
-            key {remote_host}
-            events 60
-            window 1m
         }
     }
 
@@ -44,4 +37,11 @@
         }
         format json
     }
+
+    # # Optional: rate-limit auth endpoints. Requires Caddy built with
+    # # the github.com/mholt/caddy-ratelimit plugin (xcaddy).
+    # @auth path /api/auth/login /api/auth/register /api/auth/forgot-password
+    # rate_limit @auth {
+    #     zone auth_zone { key {remote_host} events 60 window 1m }
+    # }
 }

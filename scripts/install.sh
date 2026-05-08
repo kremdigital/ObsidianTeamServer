@@ -23,6 +23,8 @@ DB_USER="${DB_USER:-obsidian}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 PG_MAJOR="${PG_MAJOR:-16}"
 REPO_URL="${REPO_URL:-}"
+PORT_WEB="${PORT_WEB:-3000}"
+PORT_SOCKET="${PORT_SOCKET:-3001}"
 
 # ---- Output helpers ---------------------------------------------------------
 COLOR_BLUE='\033[0;34m'
@@ -281,8 +283,8 @@ JWT_REFRESH_SECRET=${jwt_refresh}
 JWT_ACCESS_TTL=15m
 JWT_REFRESH_TTL=30d
 
-PORT_WEB=3000
-PORT_SOCKET=3001
+PORT_WEB=${PORT_WEB}
+PORT_SOCKET=${PORT_SOCKET}
 PUBLIC_URL=https://${DOMAIN}
 STORAGE_PATH=${STORAGE_DIR}
 
@@ -366,7 +368,9 @@ configure_caddy() {
   install -d -o caddy -g caddy /var/log/caddy 2>/dev/null || true
 
   if [[ -f "${INSTALL_DIR}/config/Caddyfile.example" ]]; then
-    DOMAIN="${DOMAIN}" envsubst < "${INSTALL_DIR}/config/Caddyfile.example" \
+    DOMAIN="${DOMAIN}" PORT_WEB="${PORT_WEB}" PORT_SOCKET="${PORT_SOCKET}" \
+      envsubst '${DOMAIN} ${PORT_WEB} ${PORT_SOCKET}' \
+      < "${INSTALL_DIR}/config/Caddyfile.example" \
       > /etc/caddy/Caddyfile
   else
     cat > /etc/caddy/Caddyfile <<EOF
