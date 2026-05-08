@@ -49,12 +49,18 @@ confirm() {
 echo "About to uninstall Obsidian Sync from ${INSTALL_DIR}."
 confirm "Continue?" || { echo "Cancelled."; exit 0; }
 
-# 1. PM2: stop processes + remove startup hook.
+# 1. PM2: stop processes + kill the God Daemon + remove startup hook.
+#
+# Killing the PM2 daemon is essential — `userdel` later refuses to remove
+# the service user while it still owns running processes (exit code 8).
+SERVICE_UID=""
 if id "${SERVICE_USER}" >/dev/null 2>&1; then
+  SERVICE_UID="$(id -u "${SERVICE_USER}")"
   if sudo -u "${SERVICE_USER}" -H pm2 list >/dev/null 2>&1; then
     sudo -u "${SERVICE_USER}" -H pm2 delete obsidian-sync-web obsidian-sync-socket 2>/dev/null || true
     sudo -u "${SERVICE_USER}" -H pm2 save --force >/dev/null 2>&1 || true
   fi
+  sudo -u "${SERVICE_USER}" -H pm2 kill >/dev/null 2>&1 || true
   systemctl disable --now "pm2-${SERVICE_USER}" 2>/dev/null || true
   rm -f "/etc/systemd/system/pm2-${SERVICE_USER}.service"
   systemctl daemon-reload
@@ -109,10 +115,20 @@ else
   echo "ℹ  Preserving DB '${DB_NAME}' (pass --drop-db to drop)"
 fi
 
-# 7. Service user.
+# 7. Service user. Clean per-uid scratch dirs (e.g. /tmp/tsx-<uid>) first —
+# userdel doesn't touch /tmp.
 if id "${SERVICE_USER}" >/dev/null 2>&1 && confirm "Remove service user '${SERVICE_USER}'?"; then
-  userdel -r "${SERVICE_USER}" 2>/dev/null || true
-  echo "✓ Service user removed"
+  if [[ -n "${SERVICE_UID}" ]]; then
+    rm -rf "/tmp/tsx-${SERVICE_UID}" 2>/dev/null || true
+  fi
+  if userdel -r "${SERVICE_USER}" 2>&1; then
+    echo "✓ Service user removed"
+  else
+    echo "✗ userdel failed — the user still exists. Common causes: lingering"
+    echo "  processes (run 'ps -u ${SERVICE_USER}' and kill them) or files"
+    echo "  outside /home/${SERVICE_USER} owned by the user."
+    exit 1
+  fi
 fi
 
 echo "Done."
