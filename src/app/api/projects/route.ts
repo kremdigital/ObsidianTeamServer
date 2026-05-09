@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db/client';
 import { errors, parseJsonBody } from '@/lib/http/errors';
+import { authenticateRequest } from '@/lib/auth/authenticate';
 import { getCurrentUser } from '@/lib/auth/session';
 import { generateUniqueSlug } from '@/lib/projects/slug';
 
@@ -11,13 +12,17 @@ const createSchema = z.object({
   iconEmoji: z.string().max(8).optional(),
 });
 
-export async function GET(): Promise<NextResponse> {
-  const user = await getCurrentUser();
-  if (!user) return errors.unauthorized();
+// GET accepts either session auth (web UI) or X-API-Key (Obsidian plugin).
+// POST stays session-only — we don't expose project creation to the plugin
+// for now; users create projects in the web UI before binding from the
+// plugin.
+export async function GET(request: Request): Promise<NextResponse> {
+  const actor = await authenticateRequest(request);
+  if (!actor) return errors.unauthorized();
 
   const projects = await prisma.project.findMany({
     where: {
-      OR: [{ ownerId: user.id }, { members: { some: { userId: user.id } } }],
+      OR: [{ ownerId: actor.id }, { members: { some: { userId: actor.id } } }],
     },
     select: {
       id: true,

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db/client';
 import { errors, parseJsonBody } from '@/lib/http/errors';
+import { authenticateRequest } from '@/lib/auth/authenticate';
 import { getCurrentUser } from '@/lib/auth/session';
 import {
   canDeleteProject,
@@ -17,10 +18,12 @@ const patchSchema = z.object({
 });
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
-  const user = await getCurrentUser();
+  // Read access is exposed to both the web UI and the plugin (read is the
+  // common case; mutating routes stay session-only).
+  const user = await authenticateRequest(request);
   if (!user) return errors.unauthorized();
 
   const { id } = await context.params;
