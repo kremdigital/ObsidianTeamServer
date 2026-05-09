@@ -1,4 +1,4 @@
-# Caddy configuration for Obsidian Sync.
+# Caddy configuration for Obsidian Team.
 #
 # This file is templated by `scripts/install.sh`: ${DOMAIN}, ${PORT_WEB} and
 # ${PORT_SOCKET} are substituted via `envsubst` before the file is copied to

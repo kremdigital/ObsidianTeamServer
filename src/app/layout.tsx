@@ -18,7 +18,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Obsidian Sync',
+  title: 'Obsidian Team',
   description: 'Самохостящаяся синхронизация Obsidian-хранилищ.',
 };
 

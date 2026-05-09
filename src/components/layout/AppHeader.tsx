@@ -21,7 +21,7 @@ export function AppHeader() {
   return (
     <header className="bg-background sticky top-0 z-30 flex h-14 items-center justify-between border-b px-6">
       <Link href="/dashboard" className="text-base font-semibold">
-        Obsidian Sync
+        Obsidian Team
       </Link>
 
       {user && (

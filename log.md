@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-05-09
+
+- **[2026-05-09] Ребрендинг: «Obsidian Sync» → «Obsidian Team».** Заменил display name по всему репо: `<title>` в `app/layout.tsx`, `appName` в `messages/ru.json`, `<h1>` в `AppHeader.tsx`, шаблоны email-приглашений (subject + body), баннеры в `install.sh` / `uninstall.sh` / `upgrade.sh`, комментарии в `Caddyfile.example` / `ecosystem.config.cjs` / `prisma/schema.prisma`, `LICENSE`, `README.md`, `.env.example`, smoke-тест `dom.test.tsx`. Internal id'ы (PM2 process names `obsidian-sync-web` / `-socket`, имя БД `obsidian_sync`, install-paths `/opt/obsidian-sync`) **оставлены как есть** — иначе пришлось бы пересоздавать развёрнутую инсталляцию. `log.md` (этот файл) откачен — это исторический лог, не переписываем задним числом.
+- Tests: 48/48 unit (`pnpm test`). Typecheck / lint / format:check — clean.
+- Деплой на VPS — отдельным шагом (`bash scripts/upgrade.sh` после `git pull`).
+
 ## 2026-05-08
 
 - **[2026-05-08] Этап 14 ЗАВЕРШЁН — серверная часть готова.** Документация и финальная зачистка. Все проверки чисты:

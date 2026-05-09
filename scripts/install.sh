@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Obsidian Sync — installer for Ubuntu 22.04+ / Debian 12+.
+# Obsidian Team — installer for Ubuntu 22.04+ / Debian 12+.
 #
 # Idempotent: safe to re-run for upgrades and partial recoveries.
 # Reads optional overrides from environment, otherwise prompts interactively.
@@ -412,7 +412,7 @@ ensure_envsubst() {
 finalize() {
   cat <<EOF
 
-${COLOR_GREEN}✓ Obsidian Sync installed.${COLOR_RESET}
+${COLOR_GREEN}✓ Obsidian Team installed.${COLOR_RESET}
 
   URL:           https://${DOMAIN}
   Super-admin:   ${ADMIN_EMAIL}

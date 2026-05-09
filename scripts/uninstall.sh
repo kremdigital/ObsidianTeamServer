@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Obsidian Sync — uninstaller. Always asks before destructive action.
+# Obsidian Team — uninstaller. Always asks before destructive action.
 #
 # Removes:
 #   - PM2 processes and systemd integration
@@ -46,7 +46,7 @@ confirm() {
   [[ "${ans}" =~ ^[Yy]$ ]]
 }
 
-echo "About to uninstall Obsidian Sync from ${INSTALL_DIR}."
+echo "About to uninstall Obsidian Team from ${INSTALL_DIR}."
 confirm "Continue?" || { echo "Cancelled."; exit 0; }
 
 # 1. PM2: stop processes + kill the God Daemon + remove startup hook.
