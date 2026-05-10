@@ -4,6 +4,8 @@ import { prisma } from '@/lib/db/client';
 import { canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
 import { listOperationsSince } from '@/lib/sync/operation-log';
 import { type VectorClock, parseClock } from '@/lib/sync/vector-clock';
+import { buildInitialState } from '@/lib/crdt/persistence';
+import { readProjectFile } from '@/lib/files/storage';
 import { child } from '@/lib/logger';
 import { getSocketUser, projectRoom } from '../auth';
 
@@ -72,17 +74,53 @@ export function attachProjectHandlers(_io: Server, socket: Socket): void {
     });
 
     // 2) Yjs sync-step1 for every text doc — clients merge with their local state.
+    const textFiles = await prisma.vaultFile.findMany({
+      where: { projectId: payload.projectId, deletedAt: null, fileType: 'TEXT' },
+      select: { id: true, path: true },
+    });
     const yjsRows = await prisma.yjsDocument.findMany({
-      where: { file: { projectId: payload.projectId, deletedAt: null } },
+      where: { fileId: { in: textFiles.map((f) => f.id) } },
       select: { fileId: true, state: true },
     });
-    const yjsDocs = yjsRows.map((row) => {
+    const stateByFileId = new Map<string, Uint8Array>(
+      yjsRows.map((r) => [r.fileId, new Uint8Array(r.state)]),
+    );
+
+    // Lazy-seed any text file that has bytes on disk but no Yjs doc — covers
+    // both legacy files created before the seed-on-create patch and any
+    // future drift if a snapshot got dropped manually.
+    const yjsDocs: Array<{ fileId: string; sync1: number[] }> = [];
+    for (const file of textFiles) {
+      let state = stateByFileId.get(file.id);
+      if (!state) {
+        try {
+          const buf = await readProjectFile(payload.projectId, file.path);
+          const text = buf.toString('utf8');
+          const initial = buildInitialState(text);
+          await prisma.yjsDocument.upsert({
+            where: { fileId: file.id },
+            create: {
+              fileId: file.id,
+              state: Buffer.from(initial.state),
+              stateVector: Buffer.from(initial.stateVector),
+            },
+            update: {
+              state: Buffer.from(initial.state),
+              stateVector: Buffer.from(initial.stateVector),
+            },
+          });
+          state = initial.state;
+        } catch (err) {
+          log.warn({ err, fileId: file.id, path: file.path }, 'yjs seed failed');
+          continue;
+        }
+      }
       const doc = new Y.Doc();
-      Y.applyUpdate(doc, new Uint8Array(row.state));
+      Y.applyUpdate(doc, state);
       const sync1 = Y.encodeStateAsUpdate(doc);
       doc.destroy();
-      return { fileId: row.fileId, sync1: Array.from(sync1) };
-    });
+      yjsDocs.push({ fileId: file.id, sync1: Array.from(sync1) });
+    }
 
     log.info(
       { projectId: payload.projectId, ops: ops.length, docs: yjsDocs.length },

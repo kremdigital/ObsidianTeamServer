@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createReadStream, type ReadStream } from 'node:fs';
-import { mkdir, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { getProjectRoot, getVersionPath, resolveProjectFile } from './paths';
 import { sha256OfBuffer, sha256OfFile } from './hash';
@@ -43,6 +43,15 @@ export async function writeProjectFile(
 export function readProjectFileStream(projectId: string, vaultPath: string): ReadStream {
   const target = resolveProjectFile(projectId, vaultPath);
   return createReadStream(target);
+}
+
+/** Read the entire file as a Buffer. Used by lazy Yjs seeding in
+ *  `project:join` where we need the bytes synchronously to build the
+ *  initial CRDT state. Streaming would only matter for very large
+ *  files; the use case here is small markdown notes. */
+export async function readProjectFile(projectId: string, vaultPath: string): Promise<Buffer> {
+  const target = resolveProjectFile(projectId, vaultPath);
+  return readFile(target);
 }
 
 export async function getProjectFileStat(
