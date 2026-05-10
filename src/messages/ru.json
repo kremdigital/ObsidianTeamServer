@@ -127,7 +127,16 @@
     "savedToast": "Сохранено",
     "removedToast": "Участник удалён",
     "invitedToast": "Приглашение отправлено",
-    "linkCreatedToast": "Ссылка создана"
+    "linkCreatedToast": "Ссылка создана",
+    "filesTitle": "Файлы",
+    "filesEmpty": "В проекте пока нет файлов.",
+    "filesError": "Не удалось загрузить список файлов: {error}",
+    "filesPath": "Путь",
+    "filesType": "Тип",
+    "filesSize": "Размер",
+    "filesUpdated": "Изменён",
+    "filesRefresh": "Обновить",
+    "filesDownload": "Скачать"
   },
   "admin": {
     "title": "Админка",

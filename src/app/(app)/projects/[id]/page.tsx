@@ -8,6 +8,7 @@ import { SettingsIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ApiError, apiGet } from '@/lib/api/client';
+import { FilesList } from './FilesList';
 
 interface ProjectDetail {
   id: string;
@@ -91,6 +92,8 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           </div>
         </CardContent>
       </Card>
+
+      <FilesList projectId={project.id} />
     </div>
   );
 }
