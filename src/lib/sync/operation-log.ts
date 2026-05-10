@@ -136,8 +136,29 @@ async function applyCreate(
   // Resolve potential CREATE-vs-CREATE collision: same path already exists.
   const existing = await prisma.vaultFile.findFirst({
     where: { projectId: ctx.projectId, path: normalizedPath, deletedAt: null },
-    select: { id: true },
+    select: { id: true, contentHash: true },
   });
+
+  // Idempotent replay: if the file already exists with the same content
+  // hash, it's the same client retrying (e.g. after a socket reconnect or
+  // server restart). Return success without creating a `*.conflict-...`
+  // duplicate. Genuine concurrent CREATE'es with different content from
+  // two devices still trip the conflict-rename path below.
+  if (existing && existing.contentHash === op.payload.contentHash) {
+    const log = await writeLog(ctx, {
+      opType: 'CREATE',
+      filePath: normalizedPath,
+      payload: {
+        ...op.payload,
+        fileId: existing.id,
+        originalPath: normalizedPath,
+      } as Prisma.InputJsonValue,
+    });
+    return {
+      outcome: { kind: 'created', fileId: existing.id, path: normalizedPath },
+      log,
+    };
+  }
 
   let pathToUse = normalizedPath;
   let conflictRenamed = false;
