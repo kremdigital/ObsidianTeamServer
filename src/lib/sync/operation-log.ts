@@ -2,6 +2,7 @@ import { Prisma, type FileType, type OpType, type OperationLog } from '@prisma/c
 import { prisma } from '@/lib/db/client';
 import { deleteProjectFile, moveProjectFile, writeProjectFile } from '@/lib/files/storage';
 import { InvalidPathError, normalizeVaultPath } from '@/lib/files/paths';
+import { buildInitialState } from '@/lib/crdt/persistence';
 import { merge, type VectorClock } from './vector-clock';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,27 @@ async function applyCreate(
     },
     select: { id: true, path: true },
   });
+
+  // For TEXT files, seed a Yjs document with the initial content. Without
+  // this, project:join's `yjsDocs` payload on a fresh client is empty,
+  // and the engine has no way to materialize the file on disk — the
+  // operation log knows the file exists but never sees the bytes.
+  if (op.payload.fileType === 'TEXT') {
+    const text = op.data.toString('utf8');
+    const { state, stateVector } = buildInitialState(text);
+    await prisma.yjsDocument.upsert({
+      where: { fileId: file.id },
+      create: {
+        fileId: file.id,
+        state: Buffer.from(state),
+        stateVector: Buffer.from(stateVector),
+      },
+      update: {
+        state: Buffer.from(state),
+        stateVector: Buffer.from(stateVector),
+      },
+    });
+  }
 
   const log = await writeLog(ctx, {
     opType: 'CREATE',
