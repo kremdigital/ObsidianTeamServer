@@ -33,7 +33,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       ownerId: true,
       createdAt: true,
       updatedAt: true,
-      _count: { select: { members: true, files: true } },
+      _count: {
+        select: { members: true, files: { where: { deletedAt: null } } },
+      },
     },
     orderBy: { updatedAt: 'desc' },
   });

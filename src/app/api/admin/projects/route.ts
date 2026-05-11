@@ -28,7 +28,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       ownerId: true,
       owner: { select: { email: true, name: true } },
       createdAt: true,
-      _count: { select: { members: true, files: true } },
+      _count: {
+        select: { members: true, files: { where: { deletedAt: null } } },
+      },
     },
     orderBy: { createdAt: 'desc' },
     take: 200,
