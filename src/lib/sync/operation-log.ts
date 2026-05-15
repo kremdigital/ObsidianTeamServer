@@ -170,18 +170,43 @@ async function applyCreate(
 
   await writeProjectFile(ctx.projectId, pathToUse, op.data);
 
-  const file = await prisma.vaultFile.create({
-    data: {
-      projectId: ctx.projectId,
-      path: pathToUse,
-      fileType: op.payload.fileType,
-      contentHash: op.payload.contentHash,
-      size: BigInt(op.payload.size),
-      ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
-      ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
-    },
-    select: { id: true, path: true },
+  // The `findFirst({deletedAt: null})` above only catches *live* rows, but
+  // `@@unique([projectId, path])` doesn't filter tombstones — so if a row
+  // at `pathToUse` was soft-deleted, a fresh `create` blows up on the
+  // unique constraint and the client stays stuck queueing the CREATE on
+  // every retry. Revive the tombstone in place (clear `deletedAt`, replace
+  // content metadata) so re-creating a previously-deleted path Just Works.
+  const tombstone = await prisma.vaultFile.findUnique({
+    where: { projectId_path: { projectId: ctx.projectId, path: pathToUse } },
+    select: { id: true, deletedAt: true },
   });
+
+  const file =
+    tombstone && tombstone.deletedAt !== null
+      ? await prisma.vaultFile.update({
+          where: { id: tombstone.id },
+          data: {
+            deletedAt: null,
+            fileType: op.payload.fileType,
+            contentHash: op.payload.contentHash,
+            size: BigInt(op.payload.size),
+            ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
+            ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
+          },
+          select: { id: true, path: true },
+        })
+      : await prisma.vaultFile.create({
+          data: {
+            projectId: ctx.projectId,
+            path: pathToUse,
+            fileType: op.payload.fileType,
+            contentHash: op.payload.contentHash,
+            size: BigInt(op.payload.size),
+            ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
+            ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
+          },
+          select: { id: true, path: true },
+        });
 
   // For TEXT files, seed a Yjs document with the initial content. Without
   // this, project:join's `yjsDocs` payload on a fresh client is empty,
@@ -375,6 +400,20 @@ async function applyMove(
       },
       log,
     };
+  }
+
+  // The collision check above only sees live rows, but
+  // `@@unique([projectId, path])` doesn't filter tombstones — so a rename
+  // onto a previously-deleted path would blow up on the unique constraint.
+  // The tombstone was already user-deleted intent; clearing it lets the
+  // rename proceed (`onDelete: Cascade` takes care of its Yjs doc + version
+  // history).
+  const tombstoneAtTarget = await prisma.vaultFile.findUnique({
+    where: { projectId_path: { projectId: ctx.projectId, path: normalizedNew } },
+    select: { id: true, deletedAt: true },
+  });
+  if (tombstoneAtTarget && tombstoneAtTarget.deletedAt !== null) {
+    await prisma.vaultFile.delete({ where: { id: tombstoneAtTarget.id } });
   }
 
   await moveProjectFile(ctx.projectId, file.path, normalizedNew);

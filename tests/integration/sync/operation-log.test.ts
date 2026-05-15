@@ -87,6 +87,50 @@ describe('applyOperation: CREATE', () => {
     expect(file?.path).toBe('note.md');
   });
 
+  it('revives a soft-deleted row at the same path instead of hitting the unique constraint', async () => {
+    const { projectId, ownerId } = await seedProject();
+    // First CREATE — file is created at note.md.
+    const first = await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 1 } },
+      {
+        opType: 'CREATE',
+        filePath: 'note.md',
+        payload: { fileType: 'TEXT', contentHash: 'h1', size: 5 },
+        data: Buffer.from('hello'),
+      },
+    );
+    if (first.outcome.kind !== 'created') throw new Error('expected created');
+    const originalId = first.outcome.fileId;
+
+    // Delete it — leaves a tombstone at note.md.
+    await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 2 } },
+      { opType: 'DELETE', filePath: 'note.md', payload: { fileId: originalId } },
+    );
+
+    // CREATE again — without the tombstone-revive fix this throws the
+    // `@@unique([projectId, path])` violation and leaves the client
+    // stuck queueing the op on every retry.
+    const second = await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 3 } },
+      {
+        opType: 'CREATE',
+        filePath: 'note.md',
+        payload: { fileType: 'TEXT', contentHash: 'h2', size: 6 },
+        data: Buffer.from('reborn'),
+      },
+    );
+    expect(second.outcome.kind).toBe('created');
+
+    // Exactly one live row at this path, content matches the new CREATE.
+    const live = await testPrisma.vaultFile.findMany({
+      where: { projectId, path: 'note.md', deletedAt: null },
+    });
+    expect(live).toHaveLength(1);
+    expect(live[0]?.contentHash).toBe('h2');
+    expect(live[0]?.size).toBe(6n);
+  });
+
   it('renames into .conflict-<clientId>.<ext> when path is taken', async () => {
     const { projectId, ownerId } = await seedProject();
     await applyOperation(
@@ -209,6 +253,53 @@ describe('applyOperation: concurrent RENAME', () => {
     if (second.outcome.kind === 'conflict_create_renamed') {
       expect(second.outcome.finalPath).toBe('target.conflict-B.md');
     }
+  });
+
+  it('renames over a soft-deleted tombstone at the target path', async () => {
+    const { projectId, ownerId } = await seedProject();
+
+    const a = await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 1 } },
+      {
+        opType: 'CREATE',
+        filePath: 'a.md',
+        payload: { fileType: 'TEXT', contentHash: 'ha', size: 1 },
+        data: Buffer.from('a'),
+      },
+    );
+    const b = await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 2 } },
+      {
+        opType: 'CREATE',
+        filePath: 'b.md',
+        payload: { fileType: 'TEXT', contentHash: 'hb', size: 1 },
+        data: Buffer.from('b'),
+      },
+    );
+    const aId = (a.outcome as { fileId: string }).fileId;
+    const bId = (b.outcome as { fileId: string }).fileId;
+
+    // Soft-delete b.md → leaves a tombstone at b.md.
+    await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 3 } },
+      { opType: 'DELETE', filePath: 'b.md', payload: { fileId: bId } },
+    );
+
+    // Rename a.md → b.md. Without the tombstone-clearing fix this hits
+    // the unique constraint (the tombstone's `[projectId, path]` row is
+    // invisible to `findFirst({deletedAt:null})` but visible to the DB).
+    const renamed = await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 4 } },
+      { opType: 'RENAME', filePath: 'a.md', newPath: 'b.md', payload: { fileId: aId } },
+    );
+    expect(renamed.outcome.kind).toBe('renamed');
+
+    const live = await testPrisma.vaultFile.findMany({
+      where: { projectId, deletedAt: null },
+      orderBy: { path: 'asc' },
+    });
+    expect(live.map((f) => f.path)).toEqual(['b.md']);
+    expect(live[0]?.id).toBe(aId);
   });
 });
 
