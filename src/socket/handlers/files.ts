@@ -87,6 +87,32 @@ export function attachFileHandlers(io: Server, socket: Socket): void {
         result,
         log: serializeLog(result.log),
       });
+
+      // For TEXT files, push the seeded Yjs state to the room right away so
+      // other vaults can materialise the content on disk without waiting
+      // for their next `project:join`. Without this, a new `.md` file
+      // shows up in the receiver's file index but the doc stays empty
+      // until reconnect. Broadcasting to *everyone in the room* (including
+      // the sender) keeps the sender's local Y.Doc in lockstep with the
+      // server's seed — preventing future client edits from re-emitting
+      // the full content (which the server would then merge as a
+      // duplicate alongside the seed).
+      if (raw.fileType === 'TEXT') {
+        const fileId = extractFileId(result.outcome);
+        if (fileId) {
+          const yjsDoc = await prisma.yjsDocument.findUnique({
+            where: { fileId },
+            select: { state: true },
+          });
+          if (yjsDoc?.state && yjsDoc.state.length > 0) {
+            io.to(projectRoom(raw.projectId)).emit('yjs:update', {
+              fileId,
+              update: Array.from(new Uint8Array(yjsDoc.state)),
+            });
+          }
+        }
+      }
+
       ack({ ok: true, outcome: result.outcome });
     } catch (err) {
       log.error({ err }, 'file:create failed');
@@ -201,4 +227,12 @@ function serializeLog(log: { id: string; vectorClock: unknown; createdAt: Date }
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'unknown_error';
+}
+
+function extractFileId(outcome: unknown): string | null {
+  if (outcome && typeof outcome === 'object' && 'fileId' in outcome) {
+    const fileId = (outcome as { fileId?: unknown }).fileId;
+    return typeof fileId === 'string' ? fileId : null;
+  }
+  return null;
 }

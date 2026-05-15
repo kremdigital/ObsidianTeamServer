@@ -228,6 +228,61 @@ describe('file:create', () => {
     });
     expect(file).not.toBeNull();
   });
+
+  it('broadcasts the seeded Yjs state alongside file:created for TEXT', async () => {
+    // Without this, a new .md file created by one client (e.g. via shell
+    // + chokidar) appears in the receiver's file index but the doc stays
+    // empty until they reconnect. The server seeds Yjs on CREATE; this
+    // test verifies the seed reaches the room as a `yjs:update` so peers
+    // materialise the content immediately.
+    const { userId: aId, plainKey: aKey } = await bootstrapUserAndKey('seedA');
+    const project = await createProject(aId);
+    const memberB = await testPrisma.user.create({
+      data: { email: `b-${Date.now()}@x.test`, passwordHash: 'h', name: 'B' },
+    });
+    await testPrisma.projectMember.create({
+      data: { projectId: project.id, userId: memberB.id, role: 'EDITOR', addedById: aId },
+    });
+    const k = await generateApiKey();
+    await testPrisma.apiKey.create({
+      data: { userId: memberB.id, name: 'cli', keyHash: k.hash, keyPrefix: k.prefix },
+    });
+    const bKey = k.plain;
+
+    const a = connect(aKey);
+    const b = connect(bKey);
+    await Promise.all([
+      new Promise<void>((r) => a.on('connect', () => r())),
+      new Promise<void>((r) => b.on('connect', () => r())),
+    ]);
+    await emitWithAck(a, 'project:join', { projectId: project.id });
+    await emitWithAck(b, 'project:join', { projectId: project.id });
+
+    const yjsBroadcast = new Promise<{ fileId: string; update: number[] }>((resolve) => {
+      b.once('yjs:update', (data) => resolve(data as never));
+    });
+
+    await emitWithAck(a, 'file:create', {
+      projectId: project.id,
+      clientId: 'client-A',
+      filePath: 'fresh.md',
+      fileType: 'TEXT',
+      contentHash: 'h',
+      size: 11,
+      data: Array.from(Buffer.from('born in cli')),
+    });
+
+    const msg = await yjsBroadcast;
+    expect(msg.fileId).toBeTruthy();
+    expect(msg.update.length).toBeGreaterThan(2);
+
+    // Decoding the broadcast on a fresh doc should reproduce the file's
+    // initial text — that's what a real plugin client would do.
+    const replica = new Y.Doc();
+    Y.applyUpdate(replica, Uint8Array.from(msg.update));
+    expect(replica.getText(TEXT_KEY).toString()).toBe('born in cli');
+    replica.destroy();
+  });
 });
 
 describe('yjs:update', () => {
