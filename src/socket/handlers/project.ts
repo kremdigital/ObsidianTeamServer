@@ -26,7 +26,16 @@ export interface JoinAckPayload {
     payload: unknown;
     createdAt: Date;
   }>;
-  yjsDocs: Array<{ fileId: string; sync1: number[] }>;
+  /**
+   * Per-text-file state snapshots. `sync1` is the server's full Y.Doc state;
+   * the client applies it to merge in anything it's missing. `stateVector`
+   * lets the client compute the inverse — operations the *server* doesn't
+   * have yet (typically offline edits made while disconnected) — and push
+   * them back via `yjs:update`. Without this round-trip, offline edits stay
+   * stuck client-side forever and the server treats every subsequent live
+   * edit as a no-op replay (the parent structs of the new op are missing).
+   */
+  yjsDocs: Array<{ fileId: string; sync1: number[]; stateVector: number[] }>;
 }
 
 export type JoinAck = JoinAckPayload | { ok: false; error: string };
@@ -89,7 +98,7 @@ export function attachProjectHandlers(_io: Server, socket: Socket): void {
     // Lazy-seed any text file that has bytes on disk but no Yjs doc — covers
     // both legacy files created before the seed-on-create patch and any
     // future drift if a snapshot got dropped manually.
-    const yjsDocs: Array<{ fileId: string; sync1: number[] }> = [];
+    const yjsDocs: Array<{ fileId: string; sync1: number[]; stateVector: number[] }> = [];
     for (const file of textFiles) {
       let state = stateByFileId.get(file.id);
       if (!state) {
@@ -118,8 +127,13 @@ export function attachProjectHandlers(_io: Server, socket: Socket): void {
       const doc = new Y.Doc();
       Y.applyUpdate(doc, state);
       const sync1 = Y.encodeStateAsUpdate(doc);
+      const stateVector = Y.encodeStateVector(doc);
       doc.destroy();
-      yjsDocs.push({ fileId: file.id, sync1: Array.from(sync1) });
+      yjsDocs.push({
+        fileId: file.id,
+        sync1: Array.from(sync1),
+        stateVector: Array.from(stateVector),
+      });
     }
 
     log.info(
