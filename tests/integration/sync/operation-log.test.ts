@@ -213,6 +213,52 @@ describe('applyOperation: DELETE > UPDATE', () => {
   });
 });
 
+describe('applyOperation: unknown file errors', () => {
+  // The plugin's `ackToOutcome` treats `error.endsWith('_not_found')` as a
+  // non-retryable failure. Returning a verbose `"<op> for unknown file: <id>"`
+  // (the old message) classified as retryable and halted the whole offline
+  // queue on a single dead-letter op — so this contract is load-bearing.
+  it('UPDATE for a non-existent fileId throws file_not_found', async () => {
+    const { projectId, ownerId } = await seedProject();
+    await expect(
+      applyOperation(
+        { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 1 } },
+        {
+          opType: 'UPDATE',
+          filePath: 'gone.md',
+          payload: { fileId: 'does-not-exist', contentHash: 'h', size: 1 },
+          data: Buffer.from('x'),
+        },
+      ),
+    ).rejects.toThrow('file_not_found');
+  });
+
+  it('DELETE for a non-existent fileId throws file_not_found', async () => {
+    const { projectId, ownerId } = await seedProject();
+    await expect(
+      applyOperation(
+        { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 1 } },
+        { opType: 'DELETE', filePath: 'gone.md', payload: { fileId: 'does-not-exist' } },
+      ),
+    ).rejects.toThrow('file_not_found');
+  });
+
+  it('RENAME for a non-existent fileId throws file_not_found', async () => {
+    const { projectId, ownerId } = await seedProject();
+    await expect(
+      applyOperation(
+        { projectId, authorId: ownerId, clientId: 'A', vectorClock: { A: 1 } },
+        {
+          opType: 'RENAME',
+          filePath: 'old.md',
+          newPath: 'new.md',
+          payload: { fileId: 'does-not-exist' },
+        },
+      ),
+    ).rejects.toThrow('file_not_found');
+  });
+});
+
 describe('applyOperation: concurrent RENAME', () => {
   it('second RENAME to an occupied target is rerouted to a conflict path', async () => {
     const { projectId, ownerId } = await seedProject();

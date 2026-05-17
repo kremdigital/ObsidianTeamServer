@@ -266,7 +266,10 @@ async function applyUpdate(
     select: { id: true, path: true, deletedAt: true },
   });
   if (!file) {
-    throw new Error(`UPDATE for unknown file: ${op.payload.fileId}`);
+    // Message intentionally ends with `_not_found` — the plugin's
+    // `ackToOutcome` treats that suffix as non-retryable so the queued op
+    // gets dropped instead of halting the whole drain on a dead-letter.
+    throw new Error('file_not_found');
   }
 
   // DELETE > UPDATE conflict resolution: if the file is currently a tombstone, no-op.
@@ -310,7 +313,7 @@ async function applyDelete(
     where: { id: op.payload.fileId, projectId: ctx.projectId },
     select: { id: true, path: true, deletedAt: true },
   });
-  if (!file) throw new Error(`DELETE for unknown file: ${op.payload.fileId}`);
+  if (!file) throw new Error('file_not_found');
 
   if (!file.deletedAt) {
     await prisma.vaultFile.update({
@@ -343,7 +346,7 @@ async function applyMove(
     where: { id: op.payload.fileId, projectId: ctx.projectId, deletedAt: null },
     select: { id: true, path: true },
   });
-  if (!file) throw new Error(`${op.opType} for unknown file: ${op.payload.fileId}`);
+  if (!file) throw new Error('file_not_found');
 
   let normalizedNew: string;
   try {
