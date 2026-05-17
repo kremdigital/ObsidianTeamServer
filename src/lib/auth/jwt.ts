@@ -7,6 +7,13 @@ export { verifyAccessToken, verifyRefreshToken } from './jwt-verify';
 
 const ACCESS_TTL = process.env.JWT_ACCESS_TTL ?? '15m';
 const REFRESH_TTL = process.env.JWT_REFRESH_TTL ?? '30d';
+/**
+ * TTL used for both the access JWT and its cookie when the user opted
+ * into "Remember me" on the login form. Matches the refresh window by
+ * default so the user stays signed in for the same period regardless of
+ * which token expires first.
+ */
+const REMEMBER_TTL = process.env.JWT_REMEMBER_TTL ?? '30d';
 
 function getSecret(name: 'JWT_SECRET' | 'JWT_REFRESH_SECRET'): Uint8Array {
   const value = process.env[name];
@@ -16,13 +23,22 @@ function getSecret(name: 'JWT_SECRET' | 'JWT_REFRESH_SECRET'): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-export async function signAccessToken(userId: string, role: UserRole): Promise<string> {
-  return new SignJWT({ role, type: 'access' })
+export async function signAccessToken(
+  userId: string,
+  role: UserRole,
+  options: { rememberMe?: boolean } = {},
+): Promise<string> {
+  const ttl = options.rememberMe ? REMEMBER_TTL : ACCESS_TTL;
+  return new SignJWT({ role, type: 'access', rememberMe: options.rememberMe === true })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(userId)
     .setIssuedAt()
-    .setExpirationTime(ACCESS_TTL)
+    .setExpirationTime(ttl)
     .sign(getSecret('JWT_SECRET'));
+}
+
+export function getAccessTtlSeconds(rememberMe: boolean): number {
+  return parseTtlToSeconds(rememberMe ? REMEMBER_TTL : ACCESS_TTL);
 }
 
 export interface IssuedRefresh {

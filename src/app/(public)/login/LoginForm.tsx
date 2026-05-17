@@ -17,6 +17,7 @@ import { ApiError, apiPost } from '@/lib/api/client';
 const schema = z.object({
   email: z.string().email('Некорректный email'),
   password: z.string().min(1, 'Введите пароль'),
+  rememberMe: z.boolean().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -43,13 +44,17 @@ function LoginFormInner({ openRegistration }: { openRegistration: boolean }) {
 
   const methods = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', password: '' },
+    defaultValues: { email: '', password: '', rememberMe: false },
   });
 
   async function onSubmit(values: FormValues) {
     setServerError(null);
     try {
-      await apiPost('/api/auth/login', values);
+      await apiPost('/api/auth/login', {
+        email: values.email,
+        password: values.password,
+        rememberMe: values.rememberMe === true,
+      });
       router.replace(params.get('next') ?? '/dashboard');
       router.refresh();
     } catch (err) {
@@ -103,6 +108,15 @@ function LoginFormInner({ openRegistration }: { openRegistration: boolean }) {
                 />
               )}
             </FormField>
+
+            <label className="text-muted-foreground flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="text-foreground accent-foreground h-4 w-4"
+                {...methods.register('rememberMe')}
+              />
+              {t('rememberMe')}
+            </label>
 
             <Button type="submit" disabled={methods.formState.isSubmitting}>
               {t('submit')}

@@ -11,10 +11,21 @@ beforeAll(() => {
 });
 
 describe('access token', () => {
-  it('signs and verifies a valid access token', async () => {
+  it('signs and verifies a valid access token (default short TTL)', async () => {
     const token = await signAccessToken('user-1', 'USER');
     const payload = await verifyAccessToken(token);
-    expect(payload).toEqual({ sub: 'user-1', role: 'USER', type: 'access' });
+    expect(payload).toEqual({
+      sub: 'user-1',
+      role: 'USER',
+      type: 'access',
+      rememberMe: false,
+    });
+  });
+
+  it('carries the rememberMe flag through sign + verify', async () => {
+    const token = await signAccessToken('user-1', 'USER', { rememberMe: true });
+    const payload = await verifyAccessToken(token);
+    expect(payload?.rememberMe).toBe(true);
   });
 
   it('rejects a token signed with a different secret', async () => {

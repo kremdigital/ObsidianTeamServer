@@ -48,14 +48,22 @@ export async function POST(request: Request): Promise<NextResponse> {
   });
 
   const meta = readClientMeta(request);
+  // Carry the original "Remember me" decision across rotation so the
+  // long-TTL session doesn't silently shrink back to 15 min on every
+  // refresh.
+  const rememberMe = stored.rememberMe;
   const session = await issueSession({
     userId: user.id,
     role: user.role,
     ip: meta.ip,
     userAgent: meta.userAgent,
+    rememberMe,
   });
 
-  await Promise.all([setRefreshCookie(session.refreshToken), setAccessCookie(session.accessToken)]);
+  await Promise.all([
+    setRefreshCookie(session.refreshToken),
+    setAccessCookie(session.accessToken, { rememberMe }),
+  ]);
 
   return NextResponse.json({ accessToken: session.accessToken });
 }

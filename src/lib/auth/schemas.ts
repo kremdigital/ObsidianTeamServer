@@ -18,6 +18,12 @@ export type RegisterInput = z.infer<typeof registerSchema>;
 export const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(128),
+  /**
+   * When true, the issued session lives for `JWT_REMEMBER_TTL` (30 days
+   * by default) instead of the short access TTL. Optional so existing
+   * clients that don't send the field stay on the short session.
+   */
+  rememberMe: z.boolean().optional(),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 

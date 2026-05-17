@@ -27,6 +27,7 @@
       "email": "Email",
       "password": "Пароль",
       "submit": "Войти",
+      "rememberMe": "Запомнить меня",
       "forgotPassword": "Забыли пароль?",
       "noAccount": "Нет аккаунта?",
       "register": "Зарегистрироваться",

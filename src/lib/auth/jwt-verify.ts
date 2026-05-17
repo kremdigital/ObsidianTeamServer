@@ -5,6 +5,12 @@ export interface AccessTokenPayload {
   sub: string;
   role: UserRole;
   type: 'access';
+  /**
+   * True when the access token was issued under "Remember me" — used by
+   * the refresh-rotation handler to keep the new pair on the same long
+   * TTL as the original.
+   */
+  rememberMe: boolean;
 }
 
 export interface RefreshTokenPayload {
@@ -31,7 +37,12 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenPaylo
     ) {
       return null;
     }
-    return { sub: payload.sub, role: payload.role as UserRole, type: 'access' };
+    return {
+      sub: payload.sub,
+      role: payload.role as UserRole,
+      type: 'access',
+      rememberMe: payload.rememberMe === true,
+    };
   } catch (err) {
     if (err instanceof joseErrors.JOSEError) {
       return null;

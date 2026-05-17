@@ -23,15 +23,20 @@ export const POST = withApiLogger(async function POST(request: Request): Promise
     return errors.unauthorized('Неверный email или пароль');
   }
 
+  const rememberMe = parsed.data.rememberMe === true;
   const meta = readClientMeta(request);
   const session = await issueSession({
     userId: user.id,
     role: user.role,
     ip: meta.ip,
     userAgent: meta.userAgent,
+    rememberMe,
   });
 
-  await Promise.all([setRefreshCookie(session.refreshToken), setAccessCookie(session.accessToken)]);
+  await Promise.all([
+    setRefreshCookie(session.refreshToken),
+    setAccessCookie(session.accessToken, { rememberMe }),
+  ]);
 
   return NextResponse.json({
     accessToken: session.accessToken,

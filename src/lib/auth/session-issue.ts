@@ -13,8 +13,17 @@ export async function issueSession(opts: {
   role: UserRole;
   ip?: string | null;
   userAgent?: string | null;
+  /**
+   * When true, the access JWT/cookie gets the long "Remember me" TTL
+   * (`JWT_REMEMBER_TTL`, default 30 d). The flag is also persisted on
+   * the `RefreshToken` row so `/api/auth/refresh` preserves it during
+   * rotation — without that the session would silently fall back to the
+   * short TTL on the first rotation.
+   */
+  rememberMe?: boolean;
 }): Promise<IssuedSession> {
-  const accessToken = await signAccessToken(opts.userId, opts.role);
+  const rememberMe = opts.rememberMe === true;
+  const accessToken = await signAccessToken(opts.userId, opts.role, { rememberMe });
   const refresh = await signRefreshToken(opts.userId);
 
   await prisma.refreshToken.create({
@@ -22,6 +31,7 @@ export async function issueSession(opts: {
       userId: opts.userId,
       tokenHash: refresh.tokenHash,
       expiresAt: refresh.expiresAt,
+      rememberMe,
       ...(opts.ip ? { ip: opts.ip } : {}),
       ...(opts.userAgent ? { userAgent: opts.userAgent } : {}),
     },
