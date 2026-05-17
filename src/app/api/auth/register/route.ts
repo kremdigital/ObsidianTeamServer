@@ -4,6 +4,7 @@ import { Prisma, type User } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
 import { errors, parseJsonBody } from '@/lib/http/errors';
 import { hashPassword } from '@/lib/auth/password';
+import { isOpenRegistration } from '@/lib/auth/registration';
 import { registerSchema } from '@/lib/auth/schemas';
 import { sendMail, verifyEmailMessage } from '@/lib/email';
 import { withApiLogger } from '@/lib/logger/http';
@@ -84,9 +85,7 @@ async function isRegistrationAllowed(
     return { ok: true, invitation: { id: invite.id } };
   }
 
-  const cfg = await prisma.serverConfig.findUnique({ where: { key: 'openRegistration' } });
-  const open = cfg?.value === true;
-  if (!open) {
+  if (!(await isOpenRegistration())) {
     return { ok: false, response: errors.forbidden('Регистрация закрыта. Требуется приглашение.') };
   }
   return { ok: true, invitation: null };
