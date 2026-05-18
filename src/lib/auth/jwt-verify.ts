@@ -8,9 +8,12 @@ export interface AccessTokenPayload {
   /**
    * True when the access token was issued under "Remember me" — used by
    * the refresh-rotation handler to keep the new pair on the same long
-   * TTL as the original.
+   * TTL as the original, and by the sliding-session proxy to decide
+   * whether to re-issue.
    */
   rememberMe: boolean;
+  /** Standard JWT `exp` claim — seconds since epoch. */
+  exp: number;
 }
 
 export interface RefreshTokenPayload {
@@ -33,7 +36,8 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenPaylo
     if (
       payload.type !== 'access' ||
       typeof payload.sub !== 'string' ||
-      typeof payload.role !== 'string'
+      typeof payload.role !== 'string' ||
+      typeof payload.exp !== 'number'
     ) {
       return null;
     }
@@ -42,6 +46,7 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenPaylo
       role: payload.role as UserRole,
       type: 'access',
       rememberMe: payload.rememberMe === true,
+      exp: payload.exp,
     };
   } catch (err) {
     if (err instanceof joseErrors.JOSEError) {

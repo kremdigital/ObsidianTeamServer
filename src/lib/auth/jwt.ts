@@ -5,15 +5,25 @@ import type { UserRole } from '@prisma/client';
 export type { AccessTokenPayload, RefreshTokenPayload } from './jwt-verify';
 export { verifyAccessToken, verifyRefreshToken } from './jwt-verify';
 
-const ACCESS_TTL = process.env.JWT_ACCESS_TTL ?? '15m';
-const REFRESH_TTL = process.env.JWT_REFRESH_TTL ?? '30d';
+// Read TTLs lazily on every call rather than at module import. Lets
+// tests flip `process.env.JWT_*_TTL` between cases without resorting to
+// module-cache invalidation, and matches the rest of the codebase's
+// pattern of reading config straight from env.
+function accessTtl(): string {
+  return process.env.JWT_ACCESS_TTL ?? '15m';
+}
+function refreshTtl(): string {
+  return process.env.JWT_REFRESH_TTL ?? '30d';
+}
 /**
  * TTL used for both the access JWT and its cookie when the user opted
  * into "Remember me" on the login form. Matches the refresh window by
  * default so the user stays signed in for the same period regardless of
  * which token expires first.
  */
-const REMEMBER_TTL = process.env.JWT_REMEMBER_TTL ?? '30d';
+function rememberTtl(): string {
+  return process.env.JWT_REMEMBER_TTL ?? '30d';
+}
 
 function getSecret(name: 'JWT_SECRET' | 'JWT_REFRESH_SECRET'): Uint8Array {
   const value = process.env[name];
@@ -28,7 +38,7 @@ export async function signAccessToken(
   role: UserRole,
   options: { rememberMe?: boolean } = {},
 ): Promise<string> {
-  const ttl = options.rememberMe ? REMEMBER_TTL : ACCESS_TTL;
+  const ttl = options.rememberMe ? rememberTtl() : accessTtl();
   return new SignJWT({ role, type: 'access', rememberMe: options.rememberMe === true })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(userId)
@@ -38,7 +48,7 @@ export async function signAccessToken(
 }
 
 export function getAccessTtlSeconds(rememberMe: boolean): number {
-  return parseTtlToSeconds(rememberMe ? REMEMBER_TTL : ACCESS_TTL);
+  return parseTtlToSeconds(rememberMe ? rememberTtl() : accessTtl());
 }
 
 export interface IssuedRefresh {
@@ -50,7 +60,7 @@ export interface IssuedRefresh {
 
 export async function signRefreshToken(userId: string): Promise<IssuedRefresh> {
   const jti = randomUUID();
-  const ttlSeconds = parseTtlToSeconds(REFRESH_TTL);
+  const ttlSeconds = parseTtlToSeconds(refreshTtl());
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
   const token = await new SignJWT({ type: 'refresh' })
@@ -81,5 +91,5 @@ function parseTtlToSeconds(ttl: string): number {
 }
 
 export function getRefreshTtlSeconds(): number {
-  return parseTtlToSeconds(REFRESH_TTL);
+  return parseTtlToSeconds(refreshTtl());
 }
