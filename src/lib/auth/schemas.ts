@@ -43,3 +43,16 @@ export const resetPasswordSchema = z.object({
 export const acceptInviteSchema = z.object({
   token: z.string().min(1).max(256),
 });
+
+/**
+ * Self-service profile edits. Every field is optional so the client can
+ * send only what changed. Email and language are pre-validated; the
+ * route handler also runs a uniqueness check on email and treats a
+ * change there as a re-verification trigger (resets `emailVerified`).
+ */
+export const updateProfileSchema = z.object({
+  name: z.string().trim().min(1, 'Имя не может быть пустым').max(100).optional(),
+  email: emailSchema.optional(),
+  language: z.string().min(2).max(10).optional(),
+});
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;

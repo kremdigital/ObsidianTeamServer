@@ -55,3 +55,21 @@ export async function apiGet<T>(url: string, init?: { signal?: AbortSignal }): P
   }
   return (await res.json()) as T;
 }
+
+export async function apiPatch<T>(
+  url: string,
+  body: unknown,
+  init?: { signal?: AbortSignal },
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    ...(init?.signal ? { signal: init.signal } : {}),
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return (await res.json()) as T;
+}

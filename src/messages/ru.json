@@ -261,8 +261,12 @@
     "name": "Имя",
     "email": "Email",
     "language": "Язык",
+    "save": "Сохранить",
     "changePassword": "Сменить пароль",
-    "saved": "Изменения сохранены"
+    "saved": "Изменения сохранены.",
+    "noChanges": "Изменений нет.",
+    "emailTaken": "Этот email уже зарегистрирован.",
+    "emailReVerifyHint": "Email изменён. Потребуется новое подтверждение."
   },
   "apiKeys": {
     "title": "API-ключи",
