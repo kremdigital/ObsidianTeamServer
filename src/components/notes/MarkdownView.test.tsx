@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { MarkdownView } from './MarkdownView';
+import { MarkdownView, type EmbedLabels } from './MarkdownView';
+import { apiGetText } from '@/lib/api/client';
 import type { NoteFile } from '@/lib/notes/types';
+
+vi.mock('@/lib/api/client', () => ({ apiGetText: vi.fn() }));
+const mockedGetText = vi.mocked(apiGetText);
 
 const files: NoteFile[] = [
   { id: 'welcome', path: 'Welcome.md', fileType: 'TEXT', mimeType: null },
@@ -9,6 +13,14 @@ const files: NoteFile[] = [
   { id: 'logo', path: 'assets/logo.png', fileType: 'BINARY', mimeType: 'image/png' },
 ];
 const current = files[0]!;
+
+const LABELS: EmbedLabels = {
+  dangling: 'dangling',
+  loading: 'loading',
+  error: 'error',
+  circular: 'circular',
+  tooDeep: 'too deep',
+};
 
 function renderView(content: string, onNavigate = vi.fn()) {
   render(
@@ -18,7 +30,7 @@ function renderView(content: string, onNavigate = vi.fn()) {
       currentFile={current}
       projectId="P1"
       onNavigate={onNavigate}
-      danglingLabel="dangling"
+      labels={LABELS}
     />,
   );
   return { onNavigate };
@@ -87,6 +99,50 @@ describe('MarkdownView', () => {
   });
 });
 
+/** Renders with an isolated projectId so the note-content cache key is unique. */
+function renderEmbed(content: string, projectId: string, onNavigate = vi.fn()) {
+  render(
+    <MarkdownView
+      content={content}
+      files={files}
+      currentFile={current}
+      projectId={projectId}
+      onNavigate={onNavigate}
+      labels={LABELS}
+    />,
+  );
+  return { onNavigate };
+}
+
+describe('MarkdownView — note transclusion', () => {
+  it('inlines a standalone note embed as a block with its body and title', async () => {
+    mockedGetText.mockResolvedValue('Embedded beta body.');
+    renderEmbed('![[projects/Beta]]', 'E1');
+    expect(await screen.findByText('Embedded beta body.')).toBeInTheDocument();
+    // Header shows the embedded note's title (path without .md).
+    expect(screen.getByText('projects/Beta')).toBeInTheDocument();
+  });
+
+  it('inlines only the requested heading section of an embed', async () => {
+    mockedGetText.mockResolvedValue('# Top\n\ntop body\n\n## Section\n\nsection body');
+    renderEmbed('![[projects/Beta#Section]]', 'E2');
+    expect(await screen.findByText('section body')).toBeInTheDocument();
+    expect(screen.queryByText('top body')).not.toBeInTheDocument();
+  });
+
+  it('shows a dangling box for an embed whose target is missing', () => {
+    renderEmbed('![[Nope]]', 'E3');
+    expect(screen.getByText('dangling')).toBeInTheDocument();
+  });
+
+  it('navigates when the embed header is clicked', async () => {
+    mockedGetText.mockResolvedValue('body');
+    const { onNavigate } = renderEmbed('![[projects/Beta]]', 'E4');
+    fireEvent.click(await screen.findByText('projects/Beta'));
+    expect(onNavigate.mock.calls[0]![0]).toMatchObject({ id: 'beta' });
+  });
+});
+
 /** Variant returning the container for DOM-shape assertions. */
 function renderHtml(content: string) {
   return render(
@@ -96,7 +152,7 @@ function renderHtml(content: string) {
       currentFile={current}
       projectId="P1"
       onNavigate={vi.fn()}
-      danglingLabel="dangling"
+      labels={LABELS}
     />,
   );
 }

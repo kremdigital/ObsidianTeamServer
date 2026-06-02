@@ -1,6 +1,13 @@
 'use client';
 
-import { type ComponentPropsWithoutRef, type ReactElement, type ReactNode, useMemo } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import ReactMarkdown, {
   defaultUrlTransform,
   type Components,
@@ -8,8 +15,9 @@ import ReactMarkdown, {
 } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkFrontmatter from 'remark-frontmatter';
-import { ExternalLinkIcon } from 'lucide-react';
+import { ExternalLinkIcon, FileTextIcon, LoaderCircleIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { apiGetText } from '@/lib/api/client';
 import { remarkWikilink } from '@/lib/notes/remark-wikilink';
 import {
   resolveWikiTarget,
@@ -18,8 +26,21 @@ import {
   parseWikiTarget,
 } from '@/lib/notes/resolve';
 import { slugifyHeading } from '@/lib/notes/slug';
+import { extractHeadingSection } from '@/lib/notes/section';
 import { parseFrontmatter, type NoteProperty } from '@/lib/notes/frontmatter';
 import type { NoteFile } from '@/lib/notes/types';
+
+/** Labels for the embed sub-states (kept out of the lib for i18n). */
+export interface EmbedLabels {
+  dangling: string;
+  loading: string;
+  error: string;
+  circular: string;
+  tooDeep: string;
+}
+
+/** How deep `![[note]]` transclusion may nest before we stop expanding. */
+const MAX_EMBED_DEPTH = 4;
 
 interface MarkdownViewProps {
   content: string;
@@ -28,11 +49,32 @@ interface MarkdownViewProps {
   projectId: string;
   /** Called for internal links; `heading` is the optional `#anchor`. */
   onNavigate: (file: NoteFile, heading: string | null) => void;
-  danglingLabel: string;
+  labels: EmbedLabels;
+  /** File ids already being rendered up-chain — guards against embed cycles. */
+  ancestors?: Set<string>;
+  /** Suppress the frontmatter Properties panel (used inside embeds). */
+  hideProperties?: boolean;
 }
 
 function fileContentUrl(projectId: string, fileId: string): string {
   return `/api/projects/${projectId}/files/${fileId}`;
+}
+
+// Promise-cache for embedded note bodies so the same note fetched from
+// several embeds (or re-renders) only hits the network once.
+const noteContentCache = new Map<string, Promise<string>>();
+
+function fetchNoteContent(projectId: string, fileId: string): Promise<string> {
+  const key = `${projectId}:${fileId}`;
+  let pending = noteContentCache.get(key);
+  if (!pending) {
+    pending = apiGetText(fileContentUrl(projectId, fileId)).catch((err: unknown) => {
+      noteContentCache.delete(key); // let a later mount retry after failure
+      throw err;
+    });
+    noteContentCache.set(key, pending);
+  }
+  return pending;
 }
 
 /** Allow our custom protocols through; sanitize everything else as usual. */
@@ -84,11 +126,39 @@ export function MarkdownView({
   currentFile,
   projectId,
   onNavigate,
-  danglingLabel,
+  labels,
+  ancestors,
+  hideProperties,
 }: MarkdownViewProps): ReactElement {
+  const embedAncestors = useMemo(
+    () => new Set([...(ancestors ?? []), currentFile.id]),
+    [ancestors, currentFile.id],
+  );
+
   const components = useMemo<Components>(() => {
     return {
       ...HEADINGS,
+
+      // A paragraph that is nothing but a note embed becomes a block
+      // transclusion. Anything else renders as a normal paragraph (so
+      // inline embeds fall back to the link form handled by `a`).
+      p({ node, children }: ComponentPropsWithoutRef<'p'> & ExtraProps) {
+        const embed = soleEmbedInner(node);
+        if (embed) {
+          return (
+            <EmbeddedNote
+              key={embed}
+              inner={embed}
+              files={files}
+              projectId={projectId}
+              onNavigate={onNavigate}
+              ancestors={embedAncestors}
+              labels={labels}
+            />
+          );
+        }
+        return <p>{children}</p>;
+      },
 
       a({ href, children }: ComponentPropsWithoutRef<'a'> & ExtraProps) {
         const raw = href ?? '';
@@ -113,7 +183,7 @@ export function MarkdownView({
             );
           }
           const resolved = resolveWikiTarget(target, files);
-          if (!resolved) return <DanglingLink title={danglingLabel}>{children}</DanglingLink>;
+          if (!resolved) return <DanglingLink title={labels.dangling}>{children}</DanglingLink>;
           return <InternalLink onClick={() => onNavigate(resolved, hd)}>{children}</InternalLink>;
         }
 
@@ -136,7 +206,7 @@ export function MarkdownView({
         const hashIdx = raw.indexOf('#');
         const anchor = hashIdx === -1 ? null : raw.slice(hashIdx + 1);
         const resolved = resolveRelativeLink(raw, currentFile.path, files);
-        if (!resolved) return <DanglingLink title={danglingLabel}>{children}</DanglingLink>;
+        if (!resolved) return <DanglingLink title={labels.dangling}>{children}</DanglingLink>;
         return <InternalLink onClick={() => onNavigate(resolved, anchor)}>{children}</InternalLink>;
       },
 
@@ -160,13 +230,13 @@ export function MarkdownView({
         );
       },
     };
-  }, [files, currentFile, projectId, onNavigate, danglingLabel]);
+  }, [files, currentFile, projectId, onNavigate, labels, embedAncestors]);
 
   const { properties, body } = useMemo(() => parseFrontmatter(content), [content]);
 
   return (
     <>
-      {properties.length > 0 && <PropertiesPanel properties={properties} />}
+      {!hideProperties && properties.length > 0 && <PropertiesPanel properties={properties} />}
       <div className={cn('markdown-body')}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkFrontmatter, remarkWikilink]}
@@ -241,6 +311,167 @@ function DanglingLink({ title, children }: { title: string; children?: ReactNode
     >
       {children}
     </span>
+  );
+}
+
+interface HastElement {
+  type?: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastElement[];
+}
+
+/**
+ * If a paragraph's only meaningful content is a single note embed
+ * (`wikiembed:` link), returns its decoded inner target; otherwise null.
+ * Whitespace-only text siblings are ignored so `![[Note]]` on its own line
+ * still counts as standalone.
+ */
+function soleEmbedInner(node: unknown): string | null {
+  const el = node as HastElement;
+  const kids = (el?.children ?? []).filter(
+    (c) => !(c.type === 'text' && (c.value ?? '').trim() === ''),
+  );
+  if (kids.length !== 1) return null;
+  const only = kids[0]!;
+  if (only.tagName !== 'a') return null;
+  const href = only.properties?.['href'];
+  if (typeof href !== 'string' || !href.startsWith('wikiembed:')) return null;
+  return safeDecode(href.slice('wikiembed:'.length));
+}
+
+interface EmbeddedNoteProps {
+  inner: string;
+  files: NoteFile[];
+  projectId: string;
+  onNavigate: (file: NoteFile, heading: string | null) => void;
+  ancestors: Set<string>;
+  labels: EmbedLabels;
+}
+
+/**
+ * Obsidian-style block transclusion for `![[Note]]` / `![[Note#Heading]]`.
+ * Resolves the target, fetches its body (whole note or a single heading
+ * section), and renders it inside a titled callout via a nested MarkdownView.
+ * Guards against unresolved targets, self/cyclic embeds, and runaway depth.
+ */
+function EmbeddedNote({
+  inner,
+  files,
+  projectId,
+  onNavigate,
+  ancestors,
+  labels,
+}: EmbeddedNoteProps): ReactElement {
+  const { target, heading } = parseWikiTarget(inner);
+  const file = resolveWikiTarget(target, files);
+
+  // Single status object so the effect only ever sets state asynchronously
+  // (in the fetch callbacks). The embed is keyed by its inner target up in
+  // the `p` renderer, so a changed target remounts this with fresh state
+  // rather than needing a synchronous reset here.
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; content: string }>({
+    status: 'loading',
+    content: '',
+  });
+
+  const blocked = !file || ancestors.has(file.id) || ancestors.size > MAX_EMBED_DEPTH;
+  const fileId = file?.id;
+
+  useEffect(() => {
+    if (!fileId || blocked) return;
+    let active = true;
+    fetchNoteContent(projectId, fileId)
+      .then((text) => {
+        if (active) setState({ status: 'ready', content: text });
+      })
+      .catch(() => {
+        if (active) setState({ status: 'error', content: '' });
+      });
+    return () => {
+      active = false;
+    };
+  }, [fileId, blocked, projectId]);
+
+  if (!file) {
+    return <EmbedBox title={target}>{labels.dangling}</EmbedBox>;
+  }
+  if (ancestors.has(file.id)) {
+    return <EmbedBox title={file.path}>{labels.circular}</EmbedBox>;
+  }
+  if (ancestors.size > MAX_EMBED_DEPTH) {
+    return <EmbedBox title={file.path}>{labels.tooDeep}</EmbedBox>;
+  }
+
+  const title = file.path.replace(/\.md$/i, '');
+  const header = (
+    <button
+      type="button"
+      onClick={() => onNavigate(file, heading)}
+      className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 text-xs font-medium"
+    >
+      <FileTextIcon className="size-3.5" />
+      {heading ? `${title} › ${heading}` : title}
+    </button>
+  );
+
+  if (state.status === 'error') {
+    return <EmbedBox header={header}>{labels.error}</EmbedBox>;
+  }
+  if (state.status === 'loading') {
+    return (
+      <EmbedBox header={header}>
+        <span className="text-muted-foreground inline-flex items-center gap-1.5">
+          <LoaderCircleIcon className="size-3.5 animate-spin" />
+          {labels.loading}
+        </span>
+      </EmbedBox>
+    );
+  }
+
+  const body = heading
+    ? (extractHeadingSection(state.content, slugifyHeading(heading)) ?? state.content)
+    : state.content;
+
+  return (
+    <EmbedBox header={header}>
+      <MarkdownView
+        content={body}
+        files={files}
+        currentFile={file}
+        projectId={projectId}
+        onNavigate={onNavigate}
+        labels={labels}
+        ancestors={ancestors}
+        hideProperties
+      />
+    </EmbedBox>
+  );
+}
+
+/** Callout chrome shared by every embed state (loaded, loading, error). */
+function EmbedBox({
+  title,
+  header,
+  children,
+}: {
+  title?: string;
+  header?: ReactNode;
+  children?: ReactNode;
+}): ReactElement {
+  return (
+    <div className="note-embed border-border bg-muted/30 my-3 rounded-md border-l-2 py-2 pr-3 pl-3">
+      <div className="mb-1.5">
+        {header ?? (
+          <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+            <FileTextIcon className="size-3.5" />
+            {title}
+          </span>
+        )}
+      </div>
+      <div className="text-sm">{children}</div>
+    </div>
   );
 }
 

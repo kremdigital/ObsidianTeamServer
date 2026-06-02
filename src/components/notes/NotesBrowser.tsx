@@ -182,7 +182,13 @@ export function NotesBrowser({ projectId, files }: NotesBrowserProps): ReactElem
                 currentFile={selected}
                 projectId={projectId}
                 onNavigate={openFile}
-                danglingLabel={t('dangling')}
+                labels={{
+                  dangling: t('dangling'),
+                  loading: t('embedLoading'),
+                  error: t('embedError'),
+                  circular: t('circularEmbed'),
+                  tooDeep: t('embedTooDeep'),
+                }}
               />
             ) : isImage(selected) ? (
               <img
