@@ -57,7 +57,7 @@ function buildLogger(kind: LoggerKind, fileName: string): Logger {
   return pino(options, pino.transport(rotatedTarget(fileName)));
 }
 
-const isSocketProcess = process.env.OSYNC_PROCESS === 'socket';
+const isSocketProcess = process.env.TEAM_VAULT_PROCESS === 'socket';
 const mainFile = isSocketProcess ? 'socket.log' : 'web.log';
 const auditFile = isSocketProcess ? 'audit-socket.log' : 'audit.log';
 

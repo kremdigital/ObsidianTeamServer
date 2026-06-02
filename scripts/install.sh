@@ -17,9 +17,9 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-/opt/team-vault}"
 LOG_DIR="${LOG_DIR:-/var/log/team-vault}"
 STORAGE_DIR="${STORAGE_DIR:-/var/lib/team-vault}"
-SERVICE_USER="${SERVICE_USER:-obsidian}"
-DB_NAME="${DB_NAME:-obsidian_sync}"
-DB_USER="${DB_USER:-obsidian}"
+SERVICE_USER="${SERVICE_USER:-team-vault}"
+DB_NAME="${DB_NAME:-team_vault}"
+DB_USER="${DB_USER:-team_vault}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 PG_MAJOR="${PG_MAJOR:-16}"
 REPO_URL="${REPO_URL:-}"
@@ -422,8 +422,8 @@ ${COLOR_GREEN}✓ Team Vault installed.${COLOR_RESET}
 
 Useful commands:
   sudo -u ${SERVICE_USER} pm2 status
-  sudo -u ${SERVICE_USER} pm2 logs obsidian-sync-web
-  sudo -u ${SERVICE_USER} pm2 logs obsidian-sync-socket
+  sudo -u ${SERVICE_USER} pm2 logs team-vault-web
+  sudo -u ${SERVICE_USER} pm2 logs team-vault-socket
   sudo systemctl status caddy
 
 Re-run this script to upgrade to a newer commit (it's idempotent).

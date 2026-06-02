@@ -16,8 +16,8 @@ export default defineConfig({
     hookTimeout: 30_000,
     fileParallelism: false,
     env: {
-      DATABASE_URL: 'postgresql://obsidian:obsidian@localhost:5432/obsidian_sync_test',
-      TEST_DATABASE_URL: 'postgresql://obsidian:obsidian@localhost:5432/obsidian_sync_test',
+      DATABASE_URL: 'postgresql://team_vault:team_vault@localhost:5432/team_vault_test',
+      TEST_DATABASE_URL: 'postgresql://team_vault:team_vault@localhost:5432/team_vault_test',
       JWT_SECRET: 'test-jwt-secret-not-for-prod-do-not-use-in-real-environments',
       JWT_REFRESH_SECRET: 'test-jwt-refresh-secret-not-for-prod-do-not-use-in-real',
       JWT_ACCESS_TTL: '15m',

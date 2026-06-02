@@ -17,9 +17,9 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-/opt/team-vault}"
 LOG_DIR="${LOG_DIR:-/var/log/team-vault}"
 STORAGE_DIR="${STORAGE_DIR:-/var/lib/team-vault}"
-SERVICE_USER="${SERVICE_USER:-obsidian}"
-DB_NAME="${DB_NAME:-obsidian_sync}"
-DB_USER="${DB_USER:-obsidian}"
+SERVICE_USER="${SERVICE_USER:-team-vault}"
+DB_NAME="${DB_NAME:-team_vault}"
+DB_USER="${DB_USER:-team_vault}"
 
 DROP_DB=0
 DROP_STORAGE=0
@@ -57,7 +57,7 @@ SERVICE_UID=""
 if id "${SERVICE_USER}" >/dev/null 2>&1; then
   SERVICE_UID="$(id -u "${SERVICE_USER}")"
   if sudo -u "${SERVICE_USER}" -H pm2 list >/dev/null 2>&1; then
-    sudo -u "${SERVICE_USER}" -H pm2 delete obsidian-sync-web obsidian-sync-socket 2>/dev/null || true
+    sudo -u "${SERVICE_USER}" -H pm2 delete team-vault-web team-vault-socket 2>/dev/null || true
     sudo -u "${SERVICE_USER}" -H pm2 save --force >/dev/null 2>&1 || true
   fi
   sudo -u "${SERVICE_USER}" -H pm2 kill >/dev/null 2>&1 || true
@@ -70,7 +70,7 @@ fi
 # 2. Caddy: remove site block — we just delete the whole Caddyfile and reload,
 # since this installer creates a single-host file. Operators with custom mixed
 # Caddyfiles should remove the host manually.
-if [[ -f /etc/caddy/Caddyfile ]] && grep -q "${DB_NAME:-obsidian_sync}\|reverse_proxy localhost:3000" /etc/caddy/Caddyfile; then
+if [[ -f /etc/caddy/Caddyfile ]] && grep -q "${DB_NAME:-team_vault}\|reverse_proxy localhost:3000" /etc/caddy/Caddyfile; then
   if confirm "Delete /etc/caddy/Caddyfile?"; then
     rm -f /etc/caddy/Caddyfile
     systemctl reload caddy 2>/dev/null || true

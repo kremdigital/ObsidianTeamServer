@@ -44,7 +44,7 @@
 - читают и пишут в **одно** хранилище файлов (`STORAGE_PATH`);
 - используют общий код из `src/lib/` (auth, files, crdt, sync, email, logger).
 
-PM2 управляет обоими, у каждого свой `OSYNC_PROCESS` env — это переключает
+PM2 управляет обоими, у каждого свой `TEAM_VAULT_PROCESS` env — это переключает
 имена файлов логов в `src/lib/logger/index.ts`:
 
 - web → `web.log` + `audit.log`
@@ -241,7 +241,7 @@ Pino + pino-roll. Файлы (всё в `${LOG_DIR}`):
 ```
 
 - **48 unit-тестов** в `src/**/*.test.ts(x)` и `tests/unit/`.
-- **58 integration-тестов** в `tests/integration/` (DB через `obsidian_sync_test`).
+- **58 integration-тестов** в `tests/integration/` (DB через `team_vault_test`).
 - **19 e2e-тестов** в `tests/e2e/` (Playwright поднимает `pnpm dev` изолированно).
 
 Полный набор: `pnpm test:all && pnpm test:e2e`.

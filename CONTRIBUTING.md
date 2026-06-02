@@ -11,8 +11,8 @@ cd server
 pnpm install
 
 # Создайте две локальные БД (один раз)
-createdb obsidian_sync_dev
-createdb obsidian_sync_test
+createdb team_vault_dev
+createdb team_vault_test
 
 cp .env.example .env
 pnpm db:migrate

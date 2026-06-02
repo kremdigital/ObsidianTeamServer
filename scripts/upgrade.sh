@@ -9,7 +9,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/team-vault}"
-SERVICE_USER="${SERVICE_USER:-obsidian}"
+SERVICE_USER="${SERVICE_USER:-team-vault}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Must be run as root." >&2

@@ -4,7 +4,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 
 const TEST_DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
-  'postgresql://obsidian:obsidian@localhost:5432/obsidian_sync_test';
+  'postgresql://team_vault:team_vault@localhost:5432/team_vault_test';
 
 const adapter = new PrismaPg({ connectionString: TEST_DATABASE_URL });
 export const e2ePrisma = new PrismaClient({ adapter, log: ['error'] });

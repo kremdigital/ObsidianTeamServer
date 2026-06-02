@@ -47,7 +47,7 @@ sudo bash /tmp/team-vault/scripts/install.sh
 сохраняет уже сгенерированные секреты. Он:
 
 1. ставит Node.js 20 LTS (NodeSource), pnpm, PostgreSQL 16 (PGDG), Caddy;
-2. создаёт системного пользователя `obsidian` и директории
+2. создаёт системного пользователя `team-vault` и директории
    `/opt/team-vault` (код), `/var/log/team-vault` (логи),
    `/var/lib/team-vault` (хранилище файлов);
 3. интерактивно спрашивает домен, email/пароль супер-админа, SMTP, флаг
@@ -98,8 +98,8 @@ sudo bash /opt/team-vault/scripts/uninstall.sh --drop-db --drop-storage --yes
 sudo apt-get install -y nodejs pnpm postgresql-16 caddy
 
 # 2. БД
-sudo -u postgres createuser -P obsidian        # CREATEDB
-sudo -u postgres createdb -O obsidian obsidian_sync
+sudo -u postgres createuser -P team_vault      # CREATEDB
+sudo -u postgres createdb -O team_vault team_vault
 
 # 3. Код + зависимости
 git clone <repo-url> /opt/team-vault
@@ -151,17 +151,17 @@ sudo systemctl reload caddy
 | `ADMIN_EMAIL`        | Email супер-админа (создаётся при первом seed)                                            |
 | `ADMIN_PASSWORD`     | Пароль супер-админа                                                                       |
 | `MAX_FILE_SIZE`      | Лимит размера файла в байтах (пусто — без лимита)                                         |
-| `OSYNC_PROCESS`      | Выставляется PM2-ом: `web` или `socket` — управляет именами лог-файлов                    |
+| `TEAM_VAULT_PROCESS` | Выставляется PM2-ом: `web` или `socket` — управляет именами лог-файлов                    |
 
 ## Управление в продакшене
 
 ```bash
 # Состояние
-sudo -u obsidian pm2 status
+sudo -u team-vault pm2 status
 
 # PM2 stdout/stderr (start-up + crashes)
-sudo -u obsidian pm2 logs obsidian-sync-web
-sudo -u obsidian pm2 logs obsidian-sync-socket
+sudo -u team-vault pm2 logs team-vault-web
+sudo -u team-vault pm2 logs team-vault-socket
 
 # Структурированные JSON-логи (pino)
 tail -f /var/log/team-vault/web.log
@@ -169,7 +169,7 @@ tail -f /var/log/team-vault/socket.log
 tail -f /var/log/team-vault/audit.log
 
 # Перезагрузка без даунтайма (с применением новых ENV)
-sudo -u obsidian pm2 reload ecosystem.config.cjs --update-env
+sudo -u team-vault pm2 reload ecosystem.config.cjs --update-env
 
 # Caddy
 sudo systemctl reload caddy
@@ -186,8 +186,8 @@ cd server
 pnpm install
 
 # 2. Локальный PostgreSQL (один раз)
-createdb obsidian_sync_dev
-createdb obsidian_sync_test
+createdb team_vault_dev
+createdb team_vault_test
 
 # 3. .env (для разработки достаточно скопировать пример)
 cp .env.example .env
@@ -205,24 +205,24 @@ pnpm dev
 
 ### Скрипты
 
-| Скрипт                               | Описание                                             |
-| ------------------------------------ | ---------------------------------------------------- |
-| `pnpm dev`                           | Web + socket с hot-reload                            |
-| `pnpm dev:web` / `pnpm dev:socket`   | По отдельности                                       |
-| `pnpm build`                         | `next build` + tsup-сборка socket-процесса           |
-| `pnpm start` / `pnpm stop`           | PM2 ecosystem                                        |
-| `pnpm lint` / `pnpm lint:fix`        | ESLint                                               |
-| `pnpm typecheck`                     | `tsc --noEmit`                                       |
-| `pnpm format` / `pnpm format:check`  | Prettier                                             |
-| `pnpm test` / `pnpm test:watch`      | Vitest unit                                          |
-| `pnpm test:integration`              | Vitest integration (требует БД `obsidian_sync_test`) |
-| `pnpm test:all`                      | unit + integration                                   |
-| `pnpm test:e2e` / `pnpm test:e2e:ui` | Playwright e2e                                       |
-| `pnpm db:migrate`                    | Создать новую миграцию (dev)                         |
-| `pnpm db:migrate:deploy`             | Применить миграции (prod)                            |
-| `pnpm db:seed`                       | Запуск `prisma/seed.ts`                              |
-| `pnpm db:studio`                     | Prisma Studio                                        |
-| `pnpm db:reset`                      | Полный сброс схемы (только для dev!)                 |
+| Скрипт                               | Описание                                          |
+| ------------------------------------ | ------------------------------------------------- |
+| `pnpm dev`                           | Web + socket с hot-reload                         |
+| `pnpm dev:web` / `pnpm dev:socket`   | По отдельности                                    |
+| `pnpm build`                         | `next build` + tsup-сборка socket-процесса        |
+| `pnpm start` / `pnpm stop`           | PM2 ecosystem                                     |
+| `pnpm lint` / `pnpm lint:fix`        | ESLint                                            |
+| `pnpm typecheck`                     | `tsc --noEmit`                                    |
+| `pnpm format` / `pnpm format:check`  | Prettier                                          |
+| `pnpm test` / `pnpm test:watch`      | Vitest unit                                       |
+| `pnpm test:integration`              | Vitest integration (требует БД `team_vault_test`) |
+| `pnpm test:all`                      | unit + integration                                |
+| `pnpm test:e2e` / `pnpm test:e2e:ui` | Playwright e2e                                    |
+| `pnpm db:migrate`                    | Создать новую миграцию (dev)                      |
+| `pnpm db:migrate:deploy`             | Применить миграции (prod)                         |
+| `pnpm db:seed`                       | Запуск `prisma/seed.ts`                           |
+| `pnpm db:studio`                     | Prisma Studio                                     |
+| `pnpm db:reset`                      | Полный сброс схемы (только для dev!)              |
 
 ## Тесты
 
@@ -230,9 +230,9 @@ pnpm dev
   Не требуют сети/БД.
 - **Integration (Vitest + реальный PostgreSQL)** — Prisma-схема, операции
   файлов, CRDT-persistence, Socket.IO end-to-end через `socket.io-client`.
-  Требуется БД `obsidian_sync_test` (создайте её один раз через `createdb`).
+  Требуется БД `team_vault_test` (создайте её один раз через `createdb`).
 - **E2E (Playwright)** — поднимает `pnpm dev` (изолированно через
-  `webServer.env.DATABASE_URL=…obsidian_sync_test`) и тестирует flow через
+  `webServer.env.DATABASE_URL=…team_vault_test`) и тестирует flow через
   HTTP API и UI.
 
 ```bash
@@ -266,7 +266,7 @@ Caddy кэширует сертификаты в `/var/lib/caddy/.local/share/ca
 
 ```bash
 sudo systemctl status postgresql            # запущен ли
-sudo -u postgres psql -c '\du'              # есть ли роль obsidian
+sudo -u postgres psql -c '\du'              # есть ли роль team_vault
 cat /etc/postgresql/16/main/pg_hba.conf     # разрешён ли md5/scram
 ```
 

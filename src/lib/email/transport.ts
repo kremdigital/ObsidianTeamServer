@@ -50,7 +50,7 @@ class SmtpTransport implements MailTransport {
   constructor(private readonly transporter: Transporter) {}
 
   async send(message: MailMessage): Promise<void> {
-    const from = process.env.SMTP_FROM ?? 'no-reply@obsidian-sync.local';
+    const from = process.env.SMTP_FROM ?? 'no-reply@team-vault.local';
     await this.transporter.sendMail({
       from,
       to: message.to,

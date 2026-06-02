@@ -15,7 +15,7 @@ export default defineConfig({
     env: {
       // Some modules eagerly construct the Prisma client at import time.
       // Provide a placeholder URL so unit tests that don't actually hit the DB still load.
-      DATABASE_URL: 'postgresql://obsidian:obsidian@localhost:5432/obsidian_sync_test',
+      DATABASE_URL: 'postgresql://team_vault:team_vault@localhost:5432/team_vault_test',
       JWT_SECRET: 'unit-jwt-secret-not-for-prod',
       JWT_REFRESH_SECRET: 'unit-jwt-refresh-secret-not-for-prod',
     },

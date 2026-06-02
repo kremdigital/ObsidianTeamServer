@@ -28,7 +28,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     env: {
-      DATABASE_URL: 'postgresql://obsidian:obsidian@localhost:5432/obsidian_sync_test',
+      DATABASE_URL: 'postgresql://team_vault:team_vault@localhost:5432/team_vault_test',
       JWT_SECRET: 'e2e-jwt-secret-not-for-prod-do-not-use-in-real-environments',
       JWT_REFRESH_SECRET: 'e2e-jwt-refresh-secret-not-for-prod-do-not-use-in-real',
       JWT_ACCESS_TTL: '15m',
