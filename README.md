@@ -1,8 +1,11 @@
-# Obsidian Team — server
+# Team Vault — server
 
-Серверная часть [Obsidian Team](../README.md) — самохостящегося решения для
-синхронизации Obsidian-хранилищ между устройствами с поддержкой совместной
-работы, истории изменений и live-режима.
+Серверная часть [Team Vault](https://github.com/kremdigital/TeamVaultPlugin) —
+самохостящегося решения для синхронизации Obsidian-хранилищ между устройствами
+с поддержкой совместной работы, истории изменений и live-режима.
+
+- Плагин для Obsidian: <https://github.com/kremdigital/TeamVaultPlugin>
+- Сервер (этот репозиторий): <https://github.com/kremdigital/TeamVaultServer>
 
 Лицензия: **MIT**.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Obsidian Team — upgrade. Pulls the latest code, reinstalls deps, runs
+# Team Vault — upgrade. Pulls the latest code, reinstalls deps, runs
 # migrations, rebuilds and reloads PM2 processes (zero-downtime restart).
 #
 # Run as root from anywhere; INSTALL_DIR is read from env or defaults to

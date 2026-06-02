@@ -19,7 +19,7 @@ function wrapHtml(title: string, body: string): string {
 <body style="font-family: system-ui, sans-serif; line-height: 1.5; color: #111;">
 ${body}
 <hr style="margin-top:32px;border:none;border-top:1px solid #ddd"/>
-<p style="font-size:12px;color:#666">Obsidian Team</p>
+<p style="font-size:12px;color:#666">Team Vault</p>
 </body></html>`;
 }
 
@@ -77,13 +77,13 @@ export function projectInvitationMessage(input: {
 }): MailMessage {
   const link = `${publicUrl()}/invite/${encodeURIComponent(input.token)}`;
   const subject = `Приглашение в проект «${input.projectName}»`;
-  const text = `${input.inviterName} приглашает вас в проект «${input.projectName}» на Obsidian Team.
+  const text = `${input.inviterName} приглашает вас в проект «${input.projectName}» на Team Vault.
 
 Принять приглашение: ${link}`;
   const html = wrapHtml(
     subject,
     `<h1>Приглашение в проект</h1>
-     <p><b>${escapeHtml(input.inviterName)}</b> приглашает вас в проект <b>${escapeHtml(input.projectName)}</b> на Obsidian Team.</p>
+     <p><b>${escapeHtml(input.inviterName)}</b> приглашает вас в проект <b>${escapeHtml(input.projectName)}</b> на Team Vault.</p>
      <p><a href="${link}" style="background:#111;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Принять приглашение</a></p>
      <p>Или скопируйте ссылку: <code>${escapeHtml(link)}</code></p>`,
   );
@@ -96,14 +96,14 @@ export function serverInvitationMessage(input: {
   token: string;
 }): MailMessage {
   const link = `${publicUrl()}/invite/${encodeURIComponent(input.token)}`;
-  const subject = 'Приглашение на сервер Obsidian Team';
-  const text = `${input.inviterName} приглашает вас на сервер Obsidian Team.
+  const subject = 'Приглашение на сервер Team Vault';
+  const text = `${input.inviterName} приглашает вас на сервер Team Vault.
 
 Перейдите для регистрации: ${link}`;
   const html = wrapHtml(
     subject,
     `<h1>Приглашение на сервер</h1>
-     <p><b>${escapeHtml(input.inviterName)}</b> приглашает вас на сервер Obsidian Team.</p>
+     <p><b>${escapeHtml(input.inviterName)}</b> приглашает вас на сервер Team Vault.</p>
      <p><a href="${link}" style="background:#111;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Зарегистрироваться</a></p>
      <p>Или скопируйте ссылку: <code>${escapeHtml(link)}</code></p>`,
   );

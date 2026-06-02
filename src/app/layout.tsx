@@ -18,7 +18,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Obsidian Team',
+  title: 'Team Vault',
   description: 'Самохостящаяся синхронизация Obsidian-хранилищ.',
 };
 

@@ -1,6 +1,6 @@
 /* eslint-disable */
 /**
- * PM2 process manifest for Obsidian Team.
+ * PM2 process manifest for Team Vault.
  *
  * Two processes share the working directory but have independent ports:
  *   - obsidian-sync-web    → Next.js (port 3000)

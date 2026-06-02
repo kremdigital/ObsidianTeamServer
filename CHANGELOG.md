@@ -63,4 +63,4 @@
 - Vitest 4, Playwright 1.59
 - pnpm 10
 
-[Unreleased]: https://github.com/<owner>/obsidian-sync/compare/HEAD
+[Unreleased]: https://github.com/kremdigital/TeamVaultServer/compare/HEAD

@@ -1,6 +1,6 @@
 {
   "common": {
-    "appName": "Obsidian Team",
+    "appName": "Team Vault",
     "loading": "Загрузка…",
     "submit": "Отправить",
     "cancel": "Отмена",
@@ -270,11 +270,11 @@
   },
   "apiKeys": {
     "title": "API-ключи",
-    "subtitle": "Используются плагином Obsidian для подключения к серверу.",
+    "subtitle": "Используются плагином Team Vault для подключения к серверу.",
     "createButton": "Создать ключ",
     "empty": {
       "title": "Ключей пока нет",
-      "text": "Создайте первый ключ, чтобы подключить плагин Obsidian."
+      "text": "Создайте первый ключ, чтобы подключить плагин Team Vault."
     },
     "table": {
       "name": "Название",
