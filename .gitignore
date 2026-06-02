@@ -55,3 +55,6 @@ next-env.d.ts
 .vscode/
 *.swp
 .DS_Store
+
+# Local-only scratch (outside any repo at workspace root)
+_local/
