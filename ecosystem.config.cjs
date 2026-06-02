@@ -10,14 +10,14 @@
  * Next.js itself for the web process, and explicitly via dotenv in
  * src/socket/server.ts for the socket process).
  *
- * Logs go to ${LOG_DIR} (defaults to /var/log/obsidian-sync, see install.sh).
+ * Logs go to ${LOG_DIR} (defaults to /var/log/team-vault, see install.sh).
  * pino-roll handles its own daily rotation per file inside the application;
  * the PM2 *_file paths below are PM2's own stdout/stderr capture for crash
  * diagnostics and start-up logs.
  */
 const path = require('path');
 
-const LOG_DIR = process.env.LOG_DIR || '/var/log/obsidian-sync';
+const LOG_DIR = process.env.LOG_DIR || '/var/log/team-vault';
 
 module.exports = {
   apps: [

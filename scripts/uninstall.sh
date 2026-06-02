@@ -5,7 +5,7 @@
 # Removes:
 #   - PM2 processes and systemd integration
 #   - Caddyfile entry
-#   - Application directory  (preserves /var/lib/obsidian-sync by default)
+#   - Application directory  (preserves /var/lib/team-vault by default)
 #   - Database and DB role   (only when --drop-db is passed)
 #
 # Usage:
@@ -14,9 +14,9 @@
 # =============================================================================
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/obsidian-sync}"
-LOG_DIR="${LOG_DIR:-/var/log/obsidian-sync}"
-STORAGE_DIR="${STORAGE_DIR:-/var/lib/obsidian-sync}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/team-vault}"
+LOG_DIR="${LOG_DIR:-/var/log/team-vault}"
+STORAGE_DIR="${STORAGE_DIR:-/var/lib/team-vault}"
 SERVICE_USER="${SERVICE_USER:-obsidian}"
 DB_NAME="${DB_NAME:-obsidian_sync}"
 DB_USER="${DB_USER:-obsidian}"

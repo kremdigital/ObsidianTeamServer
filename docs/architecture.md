@@ -26,8 +26,8 @@
                                           └───────┬────────┘
                                                   │
                                           ┌───────▼────────────────┐
-                                          │  /var/lib/obsidian-    │
-                                          │  sync (FS storage)     │
+                                          │  /var/lib/team-vault   │
+                                          │  (FS storage)          │
                                           └────────────────────────┘
 ```
 

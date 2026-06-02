@@ -4,11 +4,11 @@
 # migrations, rebuilds and reloads PM2 processes (zero-downtime restart).
 #
 # Run as root from anywhere; INSTALL_DIR is read from env or defaults to
-# /opt/obsidian-sync.
+# /opt/team-vault.
 # =============================================================================
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/obsidian-sync}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/team-vault}"
 SERVICE_USER="${SERVICE_USER:-obsidian}"
 
 if [[ "${EUID}" -ne 0 ]]; then

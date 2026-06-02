@@ -39,8 +39,8 @@
 Поддерживаются Ubuntu 22.04+ и Debian 12+.
 
 ```bash
-git clone <repo-url> /tmp/obsidian-sync
-sudo bash /tmp/obsidian-sync/scripts/install.sh
+git clone <repo-url> /tmp/team-vault
+sudo bash /tmp/team-vault/scripts/install.sh
 ```
 
 Скрипт **идемпотентен** — повторный запуск безопасно обновляет конфигурацию и
@@ -48,8 +48,8 @@ sudo bash /tmp/obsidian-sync/scripts/install.sh
 
 1. ставит Node.js 20 LTS (NodeSource), pnpm, PostgreSQL 16 (PGDG), Caddy;
 2. создаёт системного пользователя `obsidian` и директории
-   `/opt/obsidian-sync` (код), `/var/log/obsidian-sync` (логи),
-   `/var/lib/obsidian-sync` (хранилище файлов);
+   `/opt/team-vault` (код), `/var/log/team-vault` (логи),
+   `/var/lib/team-vault` (хранилище файлов);
 3. интерактивно спрашивает домен, email/пароль супер-админа, SMTP, флаг
    открытой регистрации;
 4. генерирует `.env` с криптостойкими `JWT_SECRET` через `openssl rand`;
@@ -74,7 +74,7 @@ sudo NON_INTERACTIVE=1 \
 ### Обновление
 
 ```bash
-sudo bash /opt/obsidian-sync/scripts/upgrade.sh
+sudo bash /opt/team-vault/scripts/upgrade.sh
 ```
 
 `upgrade.sh` делает `git pull --ff-only`, обновляет зависимости, применяет
@@ -84,9 +84,9 @@ sudo bash /opt/obsidian-sync/scripts/upgrade.sh
 ### Удаление
 
 ```bash
-sudo bash /opt/obsidian-sync/scripts/uninstall.sh
+sudo bash /opt/team-vault/scripts/uninstall.sh
 # Полная очистка вместе с БД и хранилищем:
-sudo bash /opt/obsidian-sync/scripts/uninstall.sh --drop-db --drop-storage --yes
+sudo bash /opt/team-vault/scripts/uninstall.sh --drop-db --drop-storage --yes
 ```
 
 ## Ручная установка
@@ -102,8 +102,8 @@ sudo -u postgres createuser -P obsidian        # CREATEDB
 sudo -u postgres createdb -O obsidian obsidian_sync
 
 # 3. Код + зависимости
-git clone <repo-url> /opt/obsidian-sync
-cd /opt/obsidian-sync
+git clone <repo-url> /opt/team-vault
+cd /opt/team-vault
 pnpm install --frozen-lockfile
 
 # 4. Окружение — заполните по таблице ниже
@@ -164,9 +164,9 @@ sudo -u obsidian pm2 logs obsidian-sync-web
 sudo -u obsidian pm2 logs obsidian-sync-socket
 
 # Структурированные JSON-логи (pino)
-tail -f /var/log/obsidian-sync/web.log
-tail -f /var/log/obsidian-sync/socket.log
-tail -f /var/log/obsidian-sync/audit.log
+tail -f /var/log/team-vault/web.log
+tail -f /var/log/team-vault/socket.log
+tail -f /var/log/team-vault/audit.log
 
 # Перезагрузка без даунтайма (с применением новых ENV)
 sudo -u obsidian pm2 reload ecosystem.config.cjs --update-env
