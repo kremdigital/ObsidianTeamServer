@@ -4,7 +4,7 @@
 import { use, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { SettingsIcon } from 'lucide-react';
+import { BookTextIcon, SettingsIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ApiError, apiGet } from '@/lib/api/client';
@@ -61,14 +61,22 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
             )}
           </div>
         </div>
-        {canManage && (
+        <div className="flex items-center gap-2">
           <Button asChild variant="outline">
-            <Link href={`/projects/${project.id}/settings`}>
-              <SettingsIcon className="mr-2 size-4" />
-              {t('settings')}
+            <Link href={`/projects/${project.id}/notes`}>
+              <BookTextIcon className="mr-2 size-4" />
+              {t('browseNotes')}
             </Link>
           </Button>
-        )}
+          {canManage && (
+            <Button asChild variant="outline">
+              <Link href={`/projects/${project.id}/settings`}>
+                <SettingsIcon className="mr-2 size-4" />
+                {t('settings')}
+              </Link>
+            </Button>
+          )}
+        </div>
       </header>
 
       <Card>

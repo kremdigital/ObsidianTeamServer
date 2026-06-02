@@ -18,6 +18,15 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  // The note browser renders user vault images served by the authenticated
+  // file-content API. Their dimensions are unknown and they aren't static
+  // assets, so next/image doesn't apply — plain <img> is correct here.
+  {
+    files: ['src/components/notes/**/*.tsx'],
+    rules: {
+      '@next/next/no-img-element': 'off',
+    },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

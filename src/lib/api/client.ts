@@ -56,6 +56,18 @@ export async function apiGet<T>(url: string, init?: { signal?: AbortSignal }): P
   return (await res.json()) as T;
 }
 
+export async function apiGetText(url: string, init?: { signal?: AbortSignal }): Promise<string> {
+  const res = await fetch(url, {
+    method: 'GET',
+    credentials: 'include',
+    ...(init?.signal ? { signal: init.signal } : {}),
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return await res.text();
+}
+
 export async function apiPatch<T>(
   url: string,
   body: unknown,
