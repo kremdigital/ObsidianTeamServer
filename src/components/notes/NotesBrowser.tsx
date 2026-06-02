@@ -123,7 +123,7 @@ export function NotesBrowser({ projectId, files }: NotesBrowserProps): ReactElem
   }, [query, expanded, visibleFiles]);
 
   return (
-    <div className="bg-card flex h-[calc(100vh-7rem)] overflow-hidden rounded-lg border">
+    <div className="bg-card flex h-full overflow-hidden rounded-lg border">
       {/* Sidebar */}
       <aside className="flex w-72 shrink-0 flex-col border-r">
         <div className="border-b p-2">
