@@ -46,7 +46,11 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
-      max_memory_restart: '512M',
+      // The socket process holds every active project's Yjs docs in memory.
+      // A real vault (e.g. 600+ notes) pushes the working set past 512M, so
+      // pm2 was recycling it in a loop (dropping live CRDT state each time).
+      // 1G gives ~2x headroom over the observed peak; the box has ~2.6G free.
+      max_memory_restart: '1024M',
       kill_timeout: 10000, // give graceful shutdown 10s to flush snapshots
       env: {
         NODE_ENV: 'production',
