@@ -171,8 +171,12 @@
         "name": "Имя",
         "email": "Email",
         "password": "Пароль",
+        "passwordHint": "Минимум 8 символов",
         "role": "Роль",
-        "submit": "Создать"
+        "roleUser": "Пользователь",
+        "roleAdmin": "Супер-админ",
+        "submit": "Создать",
+        "created": "Пользователь создан"
       },
       "deleteDialog": {
         "title": "Удалить пользователя?",

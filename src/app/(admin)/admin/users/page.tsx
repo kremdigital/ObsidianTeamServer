@@ -4,11 +4,26 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { CheckIcon, LockIcon, ShieldCheckIcon, Trash2Icon, UnlockIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  LockIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  UnlockIcon,
+  UserPlusIcon,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type { UserRole } from '@prisma/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Table,
   TableBody,
@@ -18,7 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { ApiError, apiGet } from '@/lib/api/client';
+import { ApiError, apiGet, apiPost } from '@/lib/api/client';
 
 interface AdminUser {
   id: string;
@@ -35,6 +50,7 @@ export default function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [search, setSearch] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<AdminUser | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -80,12 +96,18 @@ export default function AdminUsersPage() {
     <div className="flex flex-col gap-4">
       <header className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold">{t('title')}</h1>
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t('search')}
-          className="max-w-sm"
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('search')}
+            className="max-w-sm"
+          />
+          <Button onClick={() => setCreateOpen(true)} className="shrink-0">
+            <UserPlusIcon className="mr-2 size-4" />
+            {t('create')}
+          </Button>
+        </div>
       </header>
 
       <div className="rounded-lg border">
@@ -174,6 +196,123 @@ export default function AdminUsersPage() {
           if (confirmDelete) await deleteUser(confirmDelete.id);
         }}
       />
+
+      {createOpen && (
+        <CreateUserDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onCreated={() => {
+            setCreateOpen(false);
+            void load();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function CreateUserDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onCreated: () => void;
+}) {
+  const t = useTranslations('admin.users.createDialog');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<UserRole>('USER');
+  const [pending, setPending] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setPending(true);
+    try {
+      await apiPost('/api/admin/users', { name, email, password, role });
+      toast.success(t('created'));
+      onCreated();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.body.error.message : 'Ошибка');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const valid = name.trim().length > 0 && email.trim().length > 0 && password.length >= 8;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('title')}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="cu-name">{t('name')}</Label>
+            <Input
+              id="cu-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              maxLength={100}
+              autoFocus
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="cu-email">{t('email')}</Label>
+            <Input
+              id="cu-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="off"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="cu-password">{t('password')}</Label>
+            <Input
+              id="cu-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+              maxLength={128}
+              autoComplete="new-password"
+            />
+            <p className="text-muted-foreground text-xs">{t('passwordHint')}</p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="cu-role">{t('role')}</Label>
+            <select
+              id="cu-role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as UserRole)}
+              className="border-input focus-visible:border-ring focus-visible:ring-ring/50 dark:bg-input/30 h-8 w-full rounded-lg border bg-transparent px-2.5 py-1 text-sm outline-none focus-visible:ring-3"
+            >
+              <option value="USER">{t('roleUser')}</option>
+              <option value="SUPERADMIN">{t('roleAdmin')}</option>
+            </select>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={pending}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" disabled={pending || !valid}>
+              {t('submit')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
