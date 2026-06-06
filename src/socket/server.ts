@@ -28,6 +28,14 @@ export function createIoServer(options: CreateSocketOptions = {}): {
       credentials: true,
     },
     maxHttpBufferSize: 16 * 1024 * 1024, // 16 MB — file uploads via REST, Yjs ops are tiny
+    // A `project:join` for a large vault ships every text file's full Y.Doc
+    // state in one ack; the client applies them synchronously (+ disk writes),
+    // which can block its event loop for tens of seconds and miss the default
+    // 20s heartbeat — causing a reconnect→rejoin livelock. Give the heartbeat
+    // generous grace so a heavy catch-up can finish. (Proper fix: stream /
+    // diff the catch-up so it never blocks — tracked separately.)
+    pingInterval: 25_000,
+    pingTimeout: 180_000,
   });
 
   installAuthMiddleware(io);
