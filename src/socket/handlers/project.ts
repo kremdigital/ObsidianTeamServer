@@ -6,12 +6,35 @@ import { listOperationsSince } from '@/lib/sync/operation-log';
 import { type VectorClock, parseClock } from '@/lib/sync/vector-clock';
 import { buildInitialState } from '@/lib/crdt/persistence';
 import { readProjectFile } from '@/lib/files/storage';
+import type { Logger } from 'pino';
 import { child } from '@/lib/logger';
 import { getSocketUser, projectRoom } from '../auth';
+
+/**
+ * How many text-doc snapshots to load + ship per `yjs:catchup` batch. Keeps
+ * the server's working set (Y.Docs in memory) and each socket message small,
+ * so a large vault never loads hundreds of docs at once or blocks the client.
+ */
+const YJS_CATCHUP_BATCH = 20;
 
 export interface JoinPayload {
   projectId: string;
   sinceVectorClock?: VectorClock | null;
+  /**
+   * New clients set this to receive the Yjs catch-up as batched `yjs:catchup`
+   * events instead of one inline `yjsDocs` array. Omitted by older clients,
+   * who get the (potentially huge) inline array — see {@link JoinAckPayload}.
+   */
+  streamYjs?: boolean;
+}
+
+export interface YjsDocSnapshot {
+  fileId: string;
+  /** `Y.encodeStateAsUpdate(doc)` — the server's full state for this doc. */
+  sync1: number[];
+  /** `Y.encodeStateVector(doc)` — lets the client compute the inverse delta
+   *  (ops the server is missing, e.g. offline edits) and push them back. */
+  stateVector: number[];
 }
 
 export interface JoinAckPayload {
@@ -27,18 +50,29 @@ export interface JoinAckPayload {
     createdAt: Date;
   }>;
   /**
-   * Per-text-file state snapshots. `sync1` is the server's full Y.Doc state;
-   * the client applies it to merge in anything it's missing. `stateVector`
-   * lets the client compute the inverse — operations the *server* doesn't
-   * have yet (typically offline edits made while disconnected) — and push
-   * them back via `yjs:update`. Without this round-trip, offline edits stay
-   * stuck client-side forever and the server treats every subsequent live
-   * edit as a no-op replay (the parent structs of the new op are missing).
+   * Legacy inline catch-up: full Y.Doc state of every text file. Present ONLY
+   * for clients that did not request streaming. Building this loads every doc
+   * into memory and the client applies them synchronously — both scale badly,
+   * so new clients set `streamYjs` and receive the docs via `yjs:catchup`.
    */
-  yjsDocs: Array<{ fileId: string; sync1: number[]; stateVector: number[] }>;
+  yjsDocs?: YjsDocSnapshot[];
+  /** True when the docs are streaming via `yjs:catchup` (client opted in). */
+  yjsStream?: boolean;
+  /** Count of text docs that will stream — lets the client show progress. */
+  yjsCount?: number;
 }
 
 export type JoinAck = JoinAckPayload | { ok: false; error: string };
+
+/** Streamed Yjs catch-up batch (server → client), one per `yjs:catchup`. */
+export interface YjsCatchupBatch {
+  projectId: string;
+  docs: YjsDocSnapshot[];
+  /** True on the final batch so the client knows catch-up is complete. */
+  done: boolean;
+}
+
+type TextFile = { id: string; path: string };
 
 export function attachProjectHandlers(_io: Server, socket: Socket): void {
   const log = child({ socket: socket.id, userId: getSocketUser(socket).userId });
@@ -81,80 +115,41 @@ export function attachProjectHandlers(_io: Server, socket: Socket): void {
       projectId: payload.projectId,
       since: payload.sinceVectorClock ?? {},
     });
+    const operations = ops.map((o) => ({
+      id: o.id,
+      opType: o.opType,
+      filePath: o.filePath,
+      newPath: o.newPath,
+      authorId: o.authorId,
+      vectorClock: o.vectorClock as VectorClock,
+      payload: o.payload,
+      createdAt: o.createdAt,
+    }));
 
-    // 2) Yjs sync-step1 for every text doc — clients merge with their local state.
+    // 2) Yjs catch-up — every text doc's state. Streamed in batches for new
+    //    clients (bounded memory + non-blocking), inline for legacy clients.
     const textFiles = await prisma.vaultFile.findMany({
       where: { projectId: payload.projectId, deletedAt: null, fileType: 'TEXT' },
       select: { id: true, path: true },
     });
-    const yjsRows = await prisma.yjsDocument.findMany({
-      where: { fileId: { in: textFiles.map((f) => f.id) } },
-      select: { fileId: true, state: true },
-    });
-    const stateByFileId = new Map<string, Uint8Array>(
-      yjsRows.map((r) => [r.fileId, new Uint8Array(r.state)]),
-    );
 
-    // Lazy-seed any text file that has bytes on disk but no Yjs doc — covers
-    // both legacy files created before the seed-on-create patch and any
-    // future drift if a snapshot got dropped manually.
-    const yjsDocs: Array<{ fileId: string; sync1: number[]; stateVector: number[] }> = [];
-    for (const file of textFiles) {
-      let state = stateByFileId.get(file.id);
-      if (!state) {
-        try {
-          const buf = await readProjectFile(payload.projectId, file.path);
-          const text = buf.toString('utf8');
-          const initial = buildInitialState(text);
-          await prisma.yjsDocument.upsert({
-            where: { fileId: file.id },
-            create: {
-              fileId: file.id,
-              state: Buffer.from(initial.state),
-              stateVector: Buffer.from(initial.stateVector),
-            },
-            update: {
-              state: Buffer.from(initial.state),
-              stateVector: Buffer.from(initial.stateVector),
-            },
-          });
-          state = initial.state;
-        } catch (err) {
-          log.warn({ err, fileId: file.id, path: file.path }, 'yjs seed failed');
-          continue;
-        }
-      }
-      const doc = new Y.Doc();
-      Y.applyUpdate(doc, state);
-      const sync1 = Y.encodeStateAsUpdate(doc);
-      const stateVector = Y.encodeStateVector(doc);
-      doc.destroy();
-      yjsDocs.push({
-        fileId: file.id,
-        sync1: Array.from(sync1),
-        stateVector: Array.from(stateVector),
-      });
+    if (payload.streamYjs) {
+      log.info(
+        { projectId: payload.projectId, ops: ops.length, docs: textFiles.length, stream: true },
+        'project:join',
+      );
+      cb({ ok: true, operations, yjsStream: true, yjsCount: textFiles.length });
+      await streamYjsCatchup(socket, payload.projectId, textFiles, log);
+      return;
     }
 
+    // Legacy: build the whole array up front and return it inline.
+    const yjsDocs = await encodeDocs(payload.projectId, textFiles, log);
     log.info(
       { projectId: payload.projectId, ops: ops.length, docs: yjsDocs.length },
       'project:join',
     );
-
-    cb({
-      ok: true,
-      operations: ops.map((o) => ({
-        id: o.id,
-        opType: o.opType,
-        filePath: o.filePath,
-        newPath: o.newPath,
-        authorId: o.authorId,
-        vectorClock: o.vectorClock as VectorClock,
-        payload: o.payload,
-        createdAt: o.createdAt,
-      })),
-      yjsDocs,
-    });
+    cb({ ok: true, operations, yjsDocs });
   });
 
   socket.on('project:leave', async (raw: unknown, cb?: (ack: { ok: true }) => void) => {
@@ -169,6 +164,86 @@ export function attachProjectHandlers(_io: Server, socket: Socket): void {
   });
 }
 
+/**
+ * Streams every text doc's snapshot to the joining socket in fixed-size
+ * batches via `yjs:catchup`. Only one batch worth of Y.Docs is ever in memory,
+ * and a `setImmediate` yield between batches keeps the server event loop
+ * responsive (heartbeats, other sockets) during a large vault's catch-up.
+ */
+async function streamYjsCatchup(
+  socket: Socket,
+  projectId: string,
+  textFiles: TextFile[],
+  log: Logger,
+): Promise<void> {
+  if (textFiles.length === 0) {
+    socket.emit('yjs:catchup', { projectId, docs: [], done: true } satisfies YjsCatchupBatch);
+    return;
+  }
+  for (let i = 0; i < textFiles.length; i += YJS_CATCHUP_BATCH) {
+    const slice = textFiles.slice(i, i + YJS_CATCHUP_BATCH);
+    const docs = await encodeDocs(projectId, slice, log);
+    const done = i + YJS_CATCHUP_BATCH >= textFiles.length;
+    socket.emit('yjs:catchup', { projectId, docs, done } satisfies YjsCatchupBatch);
+    if (!done) await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * Loads + encodes the Y.Doc snapshot for each file (one bulk DB read for the
+ * whole group). A text file with bytes on disk but no Yjs doc yet is
+ * lazy-seeded — covers files created before the seed-on-create patch and any
+ * future drift. A file whose seed fails is skipped (logged), not fatal.
+ */
+async function encodeDocs(
+  projectId: string,
+  files: TextFile[],
+  log: Logger,
+): Promise<YjsDocSnapshot[]> {
+  if (files.length === 0) return [];
+  const rows = await prisma.yjsDocument.findMany({
+    where: { fileId: { in: files.map((f) => f.id) } },
+    select: { fileId: true, state: true },
+  });
+  const stateByFileId = new Map<string, Uint8Array>(
+    rows.map((r) => [r.fileId, new Uint8Array(r.state)]),
+  );
+
+  const out: YjsDocSnapshot[] = [];
+  for (const file of files) {
+    let state = stateByFileId.get(file.id);
+    if (!state) {
+      try {
+        const buf = await readProjectFile(projectId, file.path);
+        const initial = buildInitialState(buf.toString('utf8'));
+        await prisma.yjsDocument.upsert({
+          where: { fileId: file.id },
+          create: {
+            fileId: file.id,
+            state: Buffer.from(initial.state),
+            stateVector: Buffer.from(initial.stateVector),
+          },
+          update: {
+            state: Buffer.from(initial.state),
+            stateVector: Buffer.from(initial.stateVector),
+          },
+        });
+        state = initial.state;
+      } catch (err) {
+        log.warn({ err, fileId: file.id, path: file.path }, 'yjs seed failed');
+        continue;
+      }
+    }
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, state);
+    const sync1 = Y.encodeStateAsUpdate(doc);
+    const stateVector = Y.encodeStateVector(doc);
+    doc.destroy();
+    out.push({ fileId: file.id, sync1: Array.from(sync1), stateVector: Array.from(stateVector) });
+  }
+  return out;
+}
+
 function parseJoinPayload(raw: unknown): JoinPayload | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const data = raw as Record<string, unknown>;
@@ -176,5 +251,6 @@ function parseJoinPayload(raw: unknown): JoinPayload | null {
   return {
     projectId: data['projectId'],
     sinceVectorClock: parseClock(data['sinceVectorClock']),
+    streamYjs: data['streamYjs'] === true,
   };
 }

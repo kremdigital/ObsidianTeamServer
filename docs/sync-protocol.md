@@ -51,20 +51,37 @@ for (const [client, counter] of Object.entries(remoteClock)) {
 WSS /socket.io/
   auth: { apiKey: "osync_<64hex>" }
 
-→ project:join { projectId, sinceVectorClock? }
+→ project:join { projectId, sinceVectorClock?, streamYjs? }
 ← ack {
     ok: true,
     operations: OperationLogRow[],   // упорядочены по createdAt asc
-    yjsDocs: [{ fileId, sync1: number[] }]   // полный state каждого Yjs-документа
+    // Yjs-стейт — ОДИН из двух вариантов:
+    yjsDocs?: [{ fileId, sync1: number[], stateVector: number[] }]  // legacy: всё инлайн
+    yjsStream?: true, yjsCount?: number                              // новый: стрим (см. ниже)
   }
+
+// Если запрошен streamYjs: после ack сервер стримит доки батчами (по 20):
+← yjs:catchup { projectId, docs: [{ fileId, sync1, stateVector }], done: boolean }
 ```
 
 `sinceVectorClock` — клиент шлёт свой локальный vc. Сервер вернёт операции, чей `OperationLog.vectorClock` имеет хоть в одной координате больше, чем `since`.
 
+`streamYjs` — клиент просит **не** класть весь Yjs-стейт в ack. Иначе на большом
+вальте (сотни текстовых файлов) ack раздувается: сервер грузит все Y.Doc'ы в
+память (риск OOM), а клиент применяет всё синхронно и блокирует event-loop →
+пропуск Socket.IO heartbeat → reconnect-ливлок. При `streamYjs: true` ack лёгкий
+(`yjsStream/yjsCount`), а доки приходят батчами в событиях `yjs:catchup`: сервер
+грузит БД по батчу (память ограничена), клиент обрабатывает каждый батч в
+отдельном тике (event-loop уступается между сообщениями). Финальный батч —
+`done: true`. Старые клиенты не шлют флаг и получают `yjsDocs` инлайн (совместимо).
+
 После catch-up клиент **должен**:
 
 1. Применить операции в порядке от сервера.
-2. Для каждого `yjsDocs[i]` сделать `Y.applyUpdate(localDoc[fileId], Uint8Array.from(sync1))` — это симметрично объединит state.
+2. Для каждого дока (из `yjsDocs` или стримом из `yjs:catchup`) сделать
+   `Y.applyUpdate(localDoc[fileId], Uint8Array.from(sync1))` — симметрично
+   объединит state; `stateVector` позволяет вычислить обратную дельту (что
+   сервер ещё не видел) и дослать её через `yjs:update`.
 
 ## Операции (`OperationLog`)
 

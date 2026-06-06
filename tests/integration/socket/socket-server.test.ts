@@ -162,6 +162,63 @@ describe('project:join', () => {
     expect(ack.yjsDocs).toEqual([]);
   });
 
+  it('streams the catch-up via yjs:catchup when the client sets streamYjs', async () => {
+    const Y = await import('yjs');
+    const { userId, plainKey } = await bootstrapUserAndKey('streamer');
+    const project = await createProject(userId);
+
+    // A TEXT file with a real Yjs doc to stream.
+    const file = await testPrisma.vaultFile.create({
+      data: {
+        projectId: project.id,
+        path: 'note.md',
+        fileType: 'TEXT',
+        contentHash: 'h',
+        size: BigInt(5),
+        mimeType: 'text/markdown',
+      },
+    });
+    const ydoc = new Y.Doc();
+    ydoc.getText('content').insert(0, 'hello');
+    await testPrisma.yjsDocument.create({
+      data: {
+        fileId: file.id,
+        state: Buffer.from(Y.encodeStateAsUpdate(ydoc)),
+        stateVector: Buffer.from(Y.encodeStateVector(ydoc)),
+      },
+    });
+    ydoc.destroy();
+
+    const c = connect(plainKey);
+    await new Promise<void>((resolve) => c.on('connect', () => resolve()));
+
+    const batches: Array<{ docs: Array<{ fileId: string }>; done: boolean }> = [];
+    const streamed = new Promise<void>((resolve) => {
+      c.on('yjs:catchup', (b: { docs: Array<{ fileId: string }>; done: boolean }) => {
+        batches.push(b);
+        if (b.done) resolve();
+      });
+    });
+
+    const ack = await emitWithAck<{
+      ok: true;
+      yjsStream?: boolean;
+      yjsCount?: number;
+      yjsDocs?: unknown[];
+    }>(c, 'project:join', { projectId: project.id, sinceVectorClock: {}, streamYjs: true });
+
+    // Light ack — docs do NOT come inline.
+    expect(ack.ok).toBe(true);
+    expect(ack.yjsStream).toBe(true);
+    expect(ack.yjsCount).toBe(1);
+    expect(ack.yjsDocs).toBeUndefined();
+
+    await streamed;
+    const allDocs = batches.flatMap((b) => b.docs);
+    expect(allDocs.map((d) => d.fileId)).toContain(file.id);
+    expect(batches[batches.length - 1]?.done).toBe(true);
+  });
+
   it('refuses join for a non-member project', async () => {
     const { plainKey } = await bootstrapUserAndKey('outsider');
     const otherOwner = await testPrisma.user.create({
