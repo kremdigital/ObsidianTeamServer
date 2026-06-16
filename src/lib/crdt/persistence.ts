@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { prisma } from '@/lib/db/client';
 import { sha256OfBuffer } from '@/lib/files/hash';
-import { writeProjectFile } from '@/lib/files/storage';
+import { readProjectFile, writeProjectFile } from '@/lib/files/storage';
 import { recordFileVersion } from '@/lib/files/versioning';
 
 /**
@@ -211,4 +211,52 @@ export function buildInitialState(text: string): {
 
 export function hashText(text: string): string {
   return sha256OfBuffer(Buffer.from(text, 'utf8'));
+}
+
+export interface YjsSnapshot {
+  /** `Y.encodeStateAsUpdate(doc)` — full state for the client to apply. */
+  state: Uint8Array;
+  /** `Y.encodeStateVector(doc)` — lets the client compute its inverse delta. */
+  stateVector: Uint8Array;
+}
+
+/**
+ * Load a single file's Y.Doc snapshot, lazily seeding it from the on-disk `.md`
+ * content when no Yjs row exists yet (covers files created before seed-on-create
+ * and any drift). Used by the single-doc `yjs:fetch` socket handler so a web
+ * client can edit one note without pulling the whole vault's catch-up.
+ */
+export async function loadOrSeedYjsSnapshot(
+  projectId: string,
+  fileId: string,
+  path: string,
+): Promise<YjsSnapshot> {
+  const stored = await prisma.yjsDocument.findUnique({
+    where: { fileId },
+    select: { state: true },
+  });
+  if (stored?.state && stored.state.length > 0) {
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, new Uint8Array(stored.state));
+    const state = Y.encodeStateAsUpdate(doc);
+    const stateVector = Y.encodeStateVector(doc);
+    doc.destroy();
+    return { state, stateVector };
+  }
+
+  const buf = await readProjectFile(projectId, path);
+  const initial = buildInitialState(buf.toString('utf8'));
+  await prisma.yjsDocument.upsert({
+    where: { fileId },
+    create: {
+      fileId,
+      state: Buffer.from(initial.state),
+      stateVector: Buffer.from(initial.stateVector),
+    },
+    update: {
+      state: Buffer.from(initial.state),
+      stateVector: Buffer.from(initial.stateVector),
+    },
+  });
+  return initial;
 }

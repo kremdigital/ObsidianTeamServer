@@ -49,9 +49,16 @@ for (const [client, counter] of Object.entries(remoteClock)) {
 
 ```
 WSS /socket.io/
-  auth: { apiKey: "osync_<64hex>" }
+  auth: { apiKey: "osync_<64hex>" }   // плагин / программные клиенты
+  // ИЛИ (браузер / веб-редактор):
+  //   - cookie `osync_access` (httpOnly) уходит автоматически при
+  //     `withCredentials: true` — токен в JS читать не нужно;
+  //   - либо явно auth: { token: "<JWT access>" } (fallback, напр. для тестов).
+  // Сервер сначала проверяет apiKey, затем сессионный JWT. Права на действия
+  // (canViewProject / canEditFiles) проверяются ниже на каждом событии:
+  // VIEWER может подключиться и читать, но получит `forbidden` на запись.
 
-→ project:join { projectId, sinceVectorClock?, streamYjs? }
+→ project:join { projectId, sinceVectorClock?, streamYjs?, skipYjsCatchup? }
 ← ack {
     ok: true,
     operations: OperationLogRow[],   // упорядочены по createdAt asc
@@ -65,6 +72,12 @@ WSS /socket.io/
 ```
 
 `sinceVectorClock` — клиент шлёт свой локальный vc. Сервер вернёт операции, чей `OperationLog.vectorClock` имеет хоть в одной координате больше, чем `since`.
+
+`skipYjsCatchup` — клиент вступает в комнату проекта (для op-log catch-up и
+live-бродкастов `yjs:update`), но Yjs-доки **не** стримятся вовсе. Ack:
+`{ ok, operations, yjsSkipped: true }`. Используется **веб-редактором**: он
+открывает по одной заметке и тянет нужный док точечно через `yjs:fetch` (см.
+ниже), вместо catch-up всего вальта.
 
 `streamYjs` — клиент просит **не** класть весь Yjs-стейт в ack. Иначе на большом
 вальте (сотни текстовых файлов) ack раздувается: сервер грузит все Y.Doc'ы в
@@ -196,6 +209,26 @@ socket.emit('yjs:update', {
 - Update — **инкрементальный**. Не нужно слать весь state целиком.
 - Сервер сам мержит и сам бродкастит. Клиент **не** должен ретранслировать update'ы другим peer'ам напрямую.
 - `changed: false` в ack означает, что update не изменил document (например, повторная отправка). Можно безопасно игнорировать.
+
+### Точечная загрузка одного дока (`yjs:fetch`)
+
+Для клиентов, которым нужен лишь один документ (веб-редактор открывает заметки
+по одной), есть запрос состояния одного файла без catch-up всего вальта:
+
+```
+→ yjs:fetch { projectId, fileId }
+← ack { ok: true, sync1: number[], stateVector: number[] }   // как один YjsDocSnapshot
+  // или { ok: false, error }  ('forbidden' | 'file_not_found' | ...)
+```
+
+Достаточно прав на **чтение** (`canViewProject`) — состояние можно загрузить,
+но менять его всё равно только через `yjs:update` (там проверяется
+`canEditFiles`). Если Yjs-дока ещё нет, сервер лениво сидит его из `.md` на
+диске (как и при catch-up). Клиент применяет `sync1` к локальному `Y.Doc` и
+дальше работает как обычно (шлёт `yjs:update`, принимает бродкасты).
+
+> Типовой поток веб-редактора: `project:join { skipYjsCatchup: true }` →
+> `yjs:fetch { fileId }` → правки идут `yjs:update`, бродкасты применяются.
 
 ### Восстановление при реконнекте
 

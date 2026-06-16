@@ -3,17 +3,29 @@
 
 import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { BookTextIcon, LoaderCircleIcon, SearchIcon, XIcon } from 'lucide-react';
+import {
+  BookTextIcon,
+  LoaderCircleIcon,
+  PencilIcon,
+  SearchIcon,
+  EyeIcon,
+  XIcon,
+} from 'lucide-react';
 import { ApiError, apiGetText } from '@/lib/api/client';
 import { slugifyHeading } from '@/lib/notes/slug';
 import { ancestorFolderPaths } from '@/lib/notes/tree';
 import type { NoteFile } from '@/lib/notes/types';
 import { FileTree } from './FileTree';
 import { MarkdownView } from './MarkdownView';
+import { NoteEditor } from './NoteEditor';
 
 interface NotesBrowserProps {
   projectId: string;
   files: NoteFile[];
+  /** Whether the current user may edit notes (ADMIN/EDITOR/owner). Server enforces too. */
+  canEdit?: boolean;
+  /** Current user's display name — shown to collaborators in the editor. */
+  userName?: string | undefined;
 }
 
 function isMarkdown(file: NoteFile): boolean {
@@ -33,7 +45,12 @@ function isImage(file: NoteFile): boolean {
  * Internal links and embeds drive in-pane navigation, expanding the tree
  * and scrolling to `#headings` as needed.
  */
-export function NotesBrowser({ projectId, files }: NotesBrowserProps): ReactElement {
+export function NotesBrowser({
+  projectId,
+  files,
+  canEdit = false,
+  userName,
+}: NotesBrowserProps): ReactElement {
   const t = useTranslations('notes');
 
   const markdownFiles = useMemo(() => files.filter(isMarkdown), [files]);
@@ -41,6 +58,7 @@ export function NotesBrowser({ projectId, files }: NotesBrowserProps): ReactElem
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
   const pendingHeading = useRef<string | null>(null);
@@ -160,50 +178,88 @@ export function NotesBrowser({ projectId, files }: NotesBrowserProps): ReactElem
       </aside>
 
       {/* Content */}
-      <main ref={contentRef} className="min-w-0 flex-1 overflow-y-auto">
+      <main ref={contentRef} className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {!selected ? (
           <EmptyState text={t('empty')} />
-        ) : loading ? (
-          <div className="text-muted-foreground flex h-full items-center justify-center gap-2 text-sm">
-            <LoaderCircleIcon className="size-4 animate-spin" />
-            {t('loading')}
-          </div>
-        ) : error ? (
-          <p className="text-destructive p-6 text-sm">{error}</p>
         ) : (
-          <div className="mx-auto max-w-3xl px-6 py-5">
-            <div className="text-muted-foreground mb-4 border-b pb-2 font-mono text-xs">
-              {selected.path}
+          <>
+            {/* Path bar + edit/view toggle */}
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-6 py-2">
+              <span className="text-muted-foreground truncate font-mono text-xs">
+                {selected.path}
+              </span>
+              {canEdit && isMarkdown(selected) && (
+                <button
+                  type="button"
+                  onClick={() => setEditing((v) => !v)}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs"
+                >
+                  {editing ? (
+                    <>
+                      <EyeIcon className="size-3.5" />
+                      {t('viewButton')}
+                    </>
+                  ) : (
+                    <>
+                      <PencilIcon className="size-3.5" />
+                      {t('editButton')}
+                    </>
+                  )}
+                </button>
+              )}
             </div>
-            {isMarkdown(selected) ? (
-              <MarkdownView
-                content={content}
-                files={files}
-                currentFile={selected}
-                projectId={projectId}
-                onNavigate={openFile}
-                labels={{
-                  dangling: t('dangling'),
-                  loading: t('embedLoading'),
-                  error: t('embedError'),
-                  circular: t('circularEmbed'),
-                  tooDeep: t('embedTooDeep'),
-                }}
-              />
-            ) : isImage(selected) ? (
-              <img
-                src={`/api/projects/${projectId}/files/${selected.id}`}
-                alt={selected.path}
-                className="mx-auto max-w-full rounded-md border"
-              />
+
+            {editing && canEdit && isMarkdown(selected) ? (
+              <div className="min-h-0 flex-1 px-6 py-3">
+                <NoteEditor
+                  key={selected.id}
+                  projectId={projectId}
+                  fileId={selected.id}
+                  userName={userName}
+                />
+              </div>
+            ) : loading ? (
+              <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
+                <LoaderCircleIcon className="size-4 animate-spin" />
+                {t('loading')}
+              </div>
+            ) : error ? (
+              <p className="text-destructive p-6 text-sm">{error}</p>
             ) : (
-              <BinaryNotice
-                href={`/api/projects/${projectId}/files/${selected.id}`}
-                label={t('binaryDownload')}
-                notice={t('binaryNotice')}
-              />
+              <div className="flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-3xl px-6 py-5">
+                  {isMarkdown(selected) ? (
+                    <MarkdownView
+                      content={content}
+                      files={files}
+                      currentFile={selected}
+                      projectId={projectId}
+                      onNavigate={openFile}
+                      labels={{
+                        dangling: t('dangling'),
+                        loading: t('embedLoading'),
+                        error: t('embedError'),
+                        circular: t('circularEmbed'),
+                        tooDeep: t('embedTooDeep'),
+                      }}
+                    />
+                  ) : isImage(selected) ? (
+                    <img
+                      src={`/api/projects/${projectId}/files/${selected.id}`}
+                      alt={selected.path}
+                      className="mx-auto max-w-full rounded-md border"
+                    />
+                  ) : (
+                    <BinaryNotice
+                      href={`/api/projects/${projectId}/files/${selected.id}`}
+                      label={t('binaryDownload')}
+                      notice={t('binaryNotice')}
+                    />
+                  )}
+                </div>
+              </div>
             )}
-          </div>
+          </>
         )}
       </main>
     </div>

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { ApiError, apiGet } from '@/lib/api/client';
 import type { NoteFile } from '@/lib/notes/types';
 import { NotesBrowser } from '@/components/notes/NotesBrowser';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 interface ProjectDetail {
   id: string;
@@ -29,6 +30,7 @@ interface ApiFile {
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const t = useTranslations('project');
+  const { user } = useAuth();
   const { id } = use(params);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [files, setFiles] = useState<NoteFile[] | null>(null);
@@ -64,6 +66,13 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   if (!project || !files) return null;
 
   const canManage = role === 'ADMIN';
+  // Mirrors the server's canEditFiles: ADMIN/EDITOR member, project owner, or
+  // SUPERADMIN. The server enforces this again on every yjs:update.
+  const canEdit =
+    role === 'ADMIN' ||
+    role === 'EDITOR' ||
+    project.ownerId === user?.id ||
+    user?.role === 'SUPERADMIN';
 
   return (
     <div className="flex h-[calc(100vh-6.5rem)] flex-col gap-4">
@@ -88,7 +97,12 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
       </header>
 
       <div className="min-h-0 flex-1">
-        <NotesBrowser projectId={project.id} files={files} />
+        <NotesBrowser
+          projectId={project.id}
+          files={files}
+          canEdit={canEdit}
+          userName={user?.name}
+        />
       </div>
     </div>
   );

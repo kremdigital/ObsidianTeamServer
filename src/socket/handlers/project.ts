@@ -26,6 +26,12 @@ export interface JoinPayload {
    * who get the (potentially huge) inline array — see {@link JoinAckPayload}.
    */
   streamYjs?: boolean;
+  /**
+   * Join the project room (for op-log catch-up + live broadcasts) WITHOUT any
+   * Yjs doc catch-up. Used by the web editor, which pulls only the single doc
+   * it edits via `yjs:fetch` instead of the whole vault.
+   */
+  skipYjsCatchup?: boolean;
 }
 
 export interface YjsDocSnapshot {
@@ -60,6 +66,8 @@ export interface JoinAckPayload {
   yjsStream?: boolean;
   /** Count of text docs that will stream — lets the client show progress. */
   yjsCount?: number;
+  /** True when Yjs catch-up was skipped at the client's request (web editor). */
+  yjsSkipped?: boolean;
 }
 
 export type JoinAck = JoinAckPayload | { ok: false; error: string };
@@ -125,6 +133,14 @@ export function attachProjectHandlers(_io: Server, socket: Socket): void {
       payload: o.payload,
       createdAt: o.createdAt,
     }));
+
+    // Web editor: skip Yjs catch-up entirely (it fetches the single doc it
+    // edits via `yjs:fetch`). Still joined the room above for live broadcasts.
+    if (payload.skipYjsCatchup) {
+      log.info({ projectId: payload.projectId, ops: ops.length, yjsSkipped: true }, 'project:join');
+      cb({ ok: true, operations, yjsSkipped: true });
+      return;
+    }
 
     // 2) Yjs catch-up — every text doc's state. Streamed in batches for new
     //    clients (bounded memory + non-blocking), inline for legacy clients.
@@ -252,5 +268,6 @@ function parseJoinPayload(raw: unknown): JoinPayload | null {
     projectId: data['projectId'],
     sinceVectorClock: parseClock(data['sinceVectorClock']),
     streamYjs: data['streamYjs'] === true,
+    skipYjsCatchup: data['skipYjsCatchup'] === true,
   };
 }

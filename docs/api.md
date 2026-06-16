@@ -160,20 +160,28 @@ curl -sX POST https://sync.example.com/api/projects/$PROJECT_ID/files \
 
 URL: `wss://<домен>/socket.io/`. Каддиский reverse-proxy → :3001.
 
-Аутентификация: `socket.handshake.auth.apiKey` (или X-API-Key header).
-Отказ — `connect_error` со строкой `'unauthorized'`.
+Аутентификация (сервер пробует по порядку):
+
+1. **API-key** — `socket.handshake.auth.apiKey` (или X-API-Key header) — плагин.
+2. **Сессионный JWT** — браузер: cookie `osync_access` (httpOnly, уходит сам при
+   `withCredentials: true`) или явный `socket.handshake.auth.token`.
+
+Отказ — `connect_error` со строкой `'unauthorized'`. После подключения каждое
+событие проверяет права отдельно (`canViewProject` / `canEditFiles`), поэтому
+VIEWER подключается и читает, но получает `forbidden` на запись.
 
 ### Клиент → сервер
 
-| Событие                     | Payload                                                                                                   | Ack                                                                                                                                             |
-| --------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `project:join`              | `{ projectId, sinceVectorClock? }`                                                                        | `{ ok: true, operations: [...], yjsDocs: [{ fileId, sync1: number[] }] }` или `{ ok: false, error: 'forbidden' \| 'project_not_found' \| ... }` |
-| `project:leave`             | `{ projectId }`                                                                                           | `{ ok: true }`                                                                                                                                  |
-| `file:create`               | `{ projectId, clientId, vectorClock?, filePath, fileType, mimeType?, contentHash, size, data: number[] }` | `{ ok, outcome }`                                                                                                                               |
-| `file:update-binary`        | `{ projectId, clientId, vectorClock?, fileId, contentHash, size, data: number[] }`                        | `{ ok, outcome }`                                                                                                                               |
-| `file:delete`               | `{ projectId, clientId, vectorClock?, fileId, filePath }`                                                 | `{ ok, outcome }`                                                                                                                               |
-| `file:rename` / `file:move` | `{ projectId, clientId, vectorClock?, fileId, filePath, newPath }`                                        | `{ ok, outcome }`                                                                                                                               |
-| `yjs:update`                | `{ projectId, fileId, update: number[] }`                                                                 | `{ ok: true, changed: boolean }`                                                                                                                |
+| Событие                     | Payload                                                                                                   | Ack                                                                                                                                                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project:join`              | `{ projectId, sinceVectorClock?, streamYjs?, skipYjsCatchup? }`                                           | `{ ok: true, operations: [...], yjsDocs: [{ fileId, sync1: number[] }] }` или `{ ok: false, error: 'forbidden' \| 'project_not_found' \| ... }`. `skipYjsCatchup` → `{ ok, operations, yjsSkipped: true }` (без Yjs-доков). |
+| `project:leave`             | `{ projectId }`                                                                                           | `{ ok: true }`                                                                                                                                                                                                              |
+| `file:create`               | `{ projectId, clientId, vectorClock?, filePath, fileType, mimeType?, contentHash, size, data: number[] }` | `{ ok, outcome }`                                                                                                                                                                                                           |
+| `file:update-binary`        | `{ projectId, clientId, vectorClock?, fileId, contentHash, size, data: number[] }`                        | `{ ok, outcome }`                                                                                                                                                                                                           |
+| `file:delete`               | `{ projectId, clientId, vectorClock?, fileId, filePath }`                                                 | `{ ok, outcome }`                                                                                                                                                                                                           |
+| `file:rename` / `file:move` | `{ projectId, clientId, vectorClock?, fileId, filePath, newPath }`                                        | `{ ok, outcome }`                                                                                                                                                                                                           |
+| `yjs:update`                | `{ projectId, fileId, update: number[] }`                                                                 | `{ ok: true, changed: boolean }`                                                                                                                                                                                            |
+| `yjs:fetch`                 | `{ projectId, fileId }` — состояние одного дока (для веб-редактора)                                       | `{ ok: true, sync1: number[], stateVector: number[] }` или `{ ok: false, error }`. Нужны права на чтение.                                                                                                                   |
 
 ### Сервер → клиент (broadcast в room проекта)
 

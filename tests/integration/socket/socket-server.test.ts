@@ -8,6 +8,7 @@ import { Server as IOServer, type ServerOptions } from 'socket.io';
 import { io as ioClient, type Socket as ClientSocket } from 'socket.io-client';
 import { createIoServer } from '@/socket/server';
 import { generateApiKey } from '@/lib/auth/api-key';
+import { signAccessToken } from '@/lib/auth/jwt';
 import { TEXT_KEY } from '@/lib/crdt/persistence';
 import { resetDatabase, testPrisma } from '../db';
 
@@ -87,6 +88,34 @@ function connect(apiKey: string): ClientSocket {
   });
   openClients.push(c);
   return c;
+}
+
+/** Connect as a browser would: a session JWT via the handshake `auth.token`. */
+function connectWithToken(token: string): ClientSocket {
+  const c = ioClient(`http://127.0.0.1:${port}`, {
+    auth: { token },
+    transports: ['websocket'],
+    reconnection: false,
+  });
+  openClients.push(c);
+  return c;
+}
+
+/** Create a project member with the given role and a browser session token. */
+async function bootstrapMember(
+  name: string,
+  projectId: string,
+  role: 'ADMIN' | 'EDITOR' | 'VIEWER',
+  addedById: string,
+) {
+  const user = await testPrisma.user.create({
+    data: { email: `${name}-${Date.now()}-${Math.random()}@x.test`, passwordHash: 'h', name },
+  });
+  await testPrisma.projectMember.create({
+    data: { projectId, userId: user.id, role, addedById },
+  });
+  const token = await signAccessToken(user.id, 'USER');
+  return { userId: user.id, token };
 }
 
 function emitWithAck<T>(socket: ClientSocket, event: string, payload: unknown): Promise<T> {
@@ -394,5 +423,181 @@ describe('yjs:update', () => {
     Y.applyUpdate(reload, new Uint8Array(stored!.state));
     expect(reload.getText(TEXT_KEY).toString()).toBe('Hello CRDT');
     reload.destroy();
+  });
+});
+
+describe('web client (session JWT) auth', () => {
+  it('accepts a connection with a valid session token', async () => {
+    const { userId } = await bootstrapUserAndKey('web-ok');
+    const token = await signAccessToken(userId, 'USER');
+    const c = connectWithToken(token);
+    await new Promise<void>((resolve, reject) => {
+      c.on('connect', () => resolve());
+      c.on('connect_error', (err) => reject(err));
+    });
+    expect(c.connected).toBe(true);
+  });
+
+  it('rejects a connection with a bogus token', async () => {
+    const c = connectWithToken('not.a.jwt');
+    await expect(
+      new Promise<never>((_resolve, reject) => {
+        c.on('connect_error', (err) => reject(err));
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('yjs:fetch (single-doc, web editor)', () => {
+  it('returns the doc state a member can apply', async () => {
+    const { userId } = await bootstrapUserAndKey('fetch-owner');
+    const project = await createProject(userId);
+    const file = await testPrisma.vaultFile.create({
+      data: {
+        projectId: project.id,
+        path: 'fetch.md',
+        fileType: 'TEXT',
+        contentHash: 'h',
+        size: BigInt(5),
+      },
+    });
+    const ydoc = new Y.Doc();
+    ydoc.getText(TEXT_KEY).insert(0, 'fetched');
+    await testPrisma.yjsDocument.create({
+      data: {
+        fileId: file.id,
+        state: Buffer.from(Y.encodeStateAsUpdate(ydoc)),
+        stateVector: Buffer.from(Y.encodeStateVector(ydoc)),
+      },
+    });
+    ydoc.destroy();
+
+    const token = await signAccessToken(userId, 'USER');
+    const c = connectWithToken(token);
+    await new Promise<void>((resolve) => c.on('connect', () => resolve()));
+
+    const ack = await emitWithAck<{ ok: true; sync1: number[] } | { ok: false; error: string }>(
+      c,
+      'yjs:fetch',
+      { projectId: project.id, fileId: file.id },
+    );
+    expect(ack.ok).toBe(true);
+    if (ack.ok) {
+      const replica = new Y.Doc();
+      Y.applyUpdate(replica, Uint8Array.from(ack.sync1));
+      expect(replica.getText(TEXT_KEY).toString()).toBe('fetched');
+      replica.destroy();
+    }
+  });
+});
+
+describe('VIEWER permissions over the socket', () => {
+  it('can join + fetch but is refused yjs:update', async () => {
+    const { userId: ownerId } = await bootstrapUserAndKey('view-owner');
+    const project = await createProject(ownerId);
+    const file = await testPrisma.vaultFile.create({
+      data: {
+        projectId: project.id,
+        path: 'ro.md',
+        fileType: 'TEXT',
+        contentHash: 'h',
+        size: BigInt(0),
+      },
+    });
+    const seed = new Y.Doc();
+    seed.getText(TEXT_KEY).insert(0, 'read only');
+    await testPrisma.yjsDocument.create({
+      data: {
+        fileId: file.id,
+        state: Buffer.from(Y.encodeStateAsUpdate(seed)),
+        stateVector: Buffer.from(Y.encodeStateVector(seed)),
+      },
+    });
+    seed.destroy();
+
+    const viewer = await bootstrapMember('viewer', project.id, 'VIEWER', ownerId);
+    const c = connectWithToken(viewer.token);
+    await new Promise<void>((resolve) => c.on('connect', () => resolve()));
+
+    // Join (read) is allowed, with Yjs catch-up skipped.
+    const join = await emitWithAck<{ ok: true; yjsSkipped?: boolean } | { ok: false }>(
+      c,
+      'project:join',
+      { projectId: project.id, skipYjsCatchup: true },
+    );
+    expect(join.ok).toBe(true);
+    if (join.ok) expect(join.yjsSkipped).toBe(true);
+
+    // Read of a single doc is allowed.
+    const fetched = await emitWithAck<{ ok: boolean }>(c, 'yjs:fetch', {
+      projectId: project.id,
+      fileId: file.id,
+    });
+    expect(fetched.ok).toBe(true);
+
+    // Writing is refused.
+    const doc = new Y.Doc();
+    doc.getText(TEXT_KEY).insert(0, 'nope');
+    const update = Y.encodeStateAsUpdate(doc);
+    doc.destroy();
+    const ack = await emitWithAck<{ ok: false; error: string } | { ok: true }>(c, 'yjs:update', {
+      projectId: project.id,
+      fileId: file.id,
+      update: Array.from(update),
+    });
+    expect(ack.ok).toBe(false);
+    if (ack.ok === false) expect(ack.error).toBe('forbidden');
+  });
+});
+
+describe('web ↔ plugin instant sync', () => {
+  it('propagates a web (JWT, EDITOR) edit to a plugin (API key) peer', async () => {
+    const { userId: ownerId, plainKey: ownerKey } = await bootstrapUserAndKey('sync-owner');
+    const project = await createProject(ownerId);
+    const file = await testPrisma.vaultFile.create({
+      data: {
+        projectId: project.id,
+        path: 'shared-live.md',
+        fileType: 'TEXT',
+        contentHash: 'init',
+        size: BigInt(0),
+      },
+    });
+
+    // Plugin peer (API key) joins the room and listens.
+    const plugin = connect(ownerKey);
+    // Web peer (session JWT, EDITOR) joins with catch-up skipped.
+    const web = await bootstrapMember('web-editor', project.id, 'EDITOR', ownerId);
+    const browser = connectWithToken(web.token);
+    await Promise.all([
+      new Promise<void>((r) => plugin.on('connect', () => r())),
+      new Promise<void>((r) => browser.on('connect', () => r())),
+    ]);
+    await emitWithAck(plugin, 'project:join', { projectId: project.id });
+    await emitWithAck(browser, 'project:join', { projectId: project.id, skipYjsCatchup: true });
+
+    const received = new Promise<{ fileId: string; update: number[] }>((resolve) => {
+      plugin.once('yjs:update', (data) => resolve(data as never));
+    });
+
+    // Browser edits via the same CRDT channel.
+    const doc = new Y.Doc();
+    doc.getText(TEXT_KEY).insert(0, 'typed in the browser');
+    const update = Y.encodeStateAsUpdate(doc);
+    doc.destroy();
+
+    const ack = await emitWithAck<{ ok: true; changed: boolean }>(browser, 'yjs:update', {
+      projectId: project.id,
+      fileId: file.id,
+      update: Array.from(update),
+    });
+    expect(ack.ok).toBe(true);
+
+    const msg = await received;
+    expect(msg.fileId).toBe(file.id);
+    const replica = new Y.Doc();
+    Y.applyUpdate(replica, Uint8Array.from(msg.update));
+    expect(replica.getText(TEXT_KEY).toString()).toBe('typed in the browser');
+    replica.destroy();
   });
 });
