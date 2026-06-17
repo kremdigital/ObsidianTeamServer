@@ -60,6 +60,17 @@ function fileContentUrl(projectId: string, fileId: string): string {
   return `/api/projects/${projectId}/files/${fileId}`;
 }
 
+/**
+ * Real, shareable URL for an internal note link: the project page with the
+ * target note pre-selected via `?note=<path>` (+ optional `#heading` slug).
+ * Used as the anchor `href` so "open in new tab" / cmd-click resolve to the
+ * actual document instead of the project root.
+ */
+function noteHref(projectId: string, path: string, headingSlug?: string): string {
+  const base = `/projects/${projectId}?note=${encodeURIComponent(path)}`;
+  return headingSlug ? `${base}#${headingSlug}` : base;
+}
+
 // Promise-cache for embedded note bodies so the same note fetched from
 // several embeds (or re-renders) only hits the network once.
 const noteContentCache = new Map<string, Promise<string>>();
@@ -170,21 +181,24 @@ export function MarkdownView({
           // Heading-only link → jump within the current note.
           if (!target) {
             return (
-              <a
-                href={`#${slugifyHeading(hd ?? '')}`}
-                className="text-sky-400 no-underline hover:underline"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onNavigate(currentFile, hd);
-                }}
+              <InternalLink
+                href={noteHref(projectId, currentFile.path, slugifyHeading(hd ?? ''))}
+                onActivate={() => onNavigate(currentFile, hd)}
               >
                 {children}
-              </a>
+              </InternalLink>
             );
           }
           const resolved = resolveWikiTarget(target, files);
           if (!resolved) return <DanglingLink title={labels.dangling}>{children}</DanglingLink>;
-          return <InternalLink onClick={() => onNavigate(resolved, hd)}>{children}</InternalLink>;
+          return (
+            <InternalLink
+              href={noteHref(projectId, resolved.path, hd ? slugifyHeading(hd) : undefined)}
+              onActivate={() => onNavigate(resolved, hd)}
+            >
+              {children}
+            </InternalLink>
+          );
         }
 
         // External URL.
@@ -207,7 +221,14 @@ export function MarkdownView({
         const anchor = hashIdx === -1 ? null : raw.slice(hashIdx + 1);
         const resolved = resolveRelativeLink(raw, currentFile.path, files);
         if (!resolved) return <DanglingLink title={labels.dangling}>{children}</DanglingLink>;
-        return <InternalLink onClick={() => onNavigate(resolved, anchor)}>{children}</InternalLink>;
+        return (
+          <InternalLink
+            href={noteHref(projectId, resolved.path, anchor ? slugifyHeading(anchor) : undefined)}
+            onActivate={() => onNavigate(resolved, anchor)}
+          >
+            {children}
+          </InternalLink>
+        );
       },
 
       img({ src, alt }: ComponentPropsWithoutRef<'img'> & ExtraProps) {
@@ -282,20 +303,29 @@ function PropertiesPanel({ properties }: { properties: NoteProperty[] }): ReactE
   );
 }
 
+/**
+ * Internal note link. The `href` is a real, shareable project URL so the
+ * browser's "open in new tab" / cmd-click open the linked document directly.
+ * A plain left-click is intercepted for in-pane SPA navigation; modifier or
+ * non-primary clicks fall through to the browser (new tab/window).
+ */
 function InternalLink({
-  onClick,
+  href,
+  onActivate,
   children,
 }: {
-  onClick: () => void;
+  href: string;
+  onActivate: () => void;
   children?: ReactNode;
 }): ReactElement {
   return (
     <a
-      href="#"
+      href={href}
       className="text-sky-400 no-underline hover:underline"
       onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
         e.preventDefault();
-        onClick();
+        onActivate();
       }}
     >
       {children}

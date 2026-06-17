@@ -5,6 +5,8 @@ import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } 
 import { useTranslations } from 'next-intl';
 import {
   BookTextIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   LoaderCircleIcon,
   PencilIcon,
   SearchIcon,
@@ -39,11 +41,20 @@ function isImage(file: NoteFile): boolean {
   );
 }
 
+/** One stop in the in-pane navigation history. */
+interface NavEntry {
+  file: NoteFile;
+  heading: string | null;
+}
+
 /**
- * Two-pane read-only note browser. Left: collapsible file tree with a
- * filter box. Right: the rendered markdown (or an image / binary notice).
- * Internal links and embeds drive in-pane navigation, expanding the tree
- * and scrolling to `#headings` as needed.
+ * Two-pane note browser. Left: collapsible file tree with a filter box.
+ * Right: the rendered markdown (or an image / binary notice), with an
+ * optional collaborative editor. Internal links and embeds drive in-pane
+ * navigation, expanding the tree and scrolling to `#headings` as needed.
+ * A back/forward history (with toolbar arrows) tracks link navigation, and
+ * the current note is mirrored into the URL (`?note=<path>`) so it can be
+ * shared, refreshed, or opened in a new tab.
  */
 export function NotesBrowser({
   projectId,
@@ -54,7 +65,8 @@ export function NotesBrowser({
   const t = useTranslations('notes');
 
   const markdownFiles = useMemo(() => files.filter(isMarkdown), [files]);
-  const [selected, setSelected] = useState<NoteFile | null>(null);
+  const [history, setHistory] = useState<NavEntry[]>([]);
+  const [cursor, setCursor] = useState(-1);
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,25 +76,71 @@ export function NotesBrowser({
   const pendingHeading = useRef<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const openFile = useCallback((file: NoteFile, heading: string | null) => {
-    setSelected(file);
-    pendingHeading.current = heading;
-    // Reveal the file by expanding its ancestor folders.
+  const selected = cursor >= 0 ? (history[cursor]?.file ?? null) : null;
+  const canBack = cursor > 0;
+  const canForward = cursor >= 0 && cursor < history.length - 1;
+
+  // Side effects shared by every selection (push, back, forward): reveal the
+  // file in the tree, queue heading scroll, and mirror the note into the URL.
+  const applyEntry = useCallback((entry: NavEntry) => {
+    pendingHeading.current = entry.heading;
     setExpanded((prev) => {
       const next = new Set(prev);
-      for (const p of ancestorFolderPaths(file.path)) next.add(p);
+      for (const p of ancestorFolderPaths(entry.file.path)) next.add(p);
       return next;
     });
+    const hash = entry.heading ? `#${slugifyHeading(entry.heading)}` : '';
+    const url = `${window.location.pathname}?note=${encodeURIComponent(entry.file.path)}${hash}`;
+    window.history.replaceState(null, '', url);
   }, []);
 
-  // Pick a sensible default note on first load (README/Welcome, else first).
+  // Navigate to a note (tree click / internal link): push a new history entry,
+  // dropping any forward entries beyond the current cursor. Re-selecting the
+  // current note (same file + heading) just re-reveals it without polluting
+  // the stack.
+  const openFile = useCallback(
+    (file: NoteFile, heading: string | null) => {
+      const current = cursor >= 0 ? history[cursor] : undefined;
+      if (current && current.file.id === file.id && current.heading === heading) {
+        applyEntry({ file, heading });
+        return;
+      }
+      setHistory((prev) => [...prev.slice(0, cursor + 1), { file, heading }]);
+      setCursor((c) => c + 1);
+      applyEntry({ file, heading });
+    },
+    [cursor, history, applyEntry],
+  );
+
+  const goBack = useCallback(() => {
+    if (cursor <= 0) return;
+    const entry = history[cursor - 1]!;
+    setCursor(cursor - 1);
+    applyEntry(entry);
+  }, [cursor, history, applyEntry]);
+
+  const goForward = useCallback(() => {
+    if (cursor >= history.length - 1) return;
+    const entry = history[cursor + 1]!;
+    setCursor(cursor + 1);
+    applyEntry(entry);
+  }, [cursor, history, applyEntry]);
+
+  // First load: select the note from `?note=<path>` (deep link / new tab) if it
+  // resolves, else a sensible default (README/Welcome, else first).
   useEffect(() => {
     if (selected || markdownFiles.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const wanted = params.get('note');
+    const fromUrl = wanted ? files.find((f) => f.path === wanted && isMarkdown(f)) : undefined;
+    const heading =
+      fromUrl && window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : null;
     const preferred =
+      fromUrl ??
       markdownFiles.find((f) => /(^|\/)(readme|welcome|index|home)\.md$/i.test(f.path)) ??
       markdownFiles[0]!;
-    openFile(preferred, null);
-  }, [markdownFiles, selected, openFile]);
+    openFile(preferred, heading);
+  }, [markdownFiles, selected, openFile, files]);
 
   // Fetch content whenever the selected file changes (markdown only).
   useEffect(() => {
@@ -183,11 +241,33 @@ export function NotesBrowser({
           <EmptyState text={t('empty')} />
         ) : (
           <>
-            {/* Path bar + edit/view toggle */}
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-6 py-2">
-              <span className="text-muted-foreground truncate font-mono text-xs">
-                {selected.path}
-              </span>
+            {/* Nav arrows + path + edit/view toggle */}
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+              <div className="flex min-w-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={goBack}
+                  disabled={!canBack}
+                  aria-label={t('navBack')}
+                  title={t('navBack')}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded-md p-1 disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <ChevronLeftIcon className="size-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={goForward}
+                  disabled={!canForward}
+                  aria-label={t('navForward')}
+                  title={t('navForward')}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent rounded-md p-1 disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <ChevronRightIcon className="size-4" />
+                </button>
+                <span className="text-muted-foreground ml-1 truncate font-mono text-xs">
+                  {selected.path}
+                </span>
+              </div>
               {canEdit && isMarkdown(selected) && (
                 <button
                   type="button"

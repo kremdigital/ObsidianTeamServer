@@ -332,6 +332,8 @@
     "binaryDownload": "Скачать файл",
     "editButton": "Редактировать",
     "viewButton": "Просмотр",
+    "navBack": "Назад",
+    "navForward": "Вперёд",
     "editorConnecting": "Подключение…",
     "editorLive": "Синхронизация включена",
     "editorOffline": "Нет соединения — переподключение…",
