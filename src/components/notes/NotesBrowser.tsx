@@ -1,7 +1,15 @@
 'use client';
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslations } from 'next-intl';
 import {
   BookTextIcon,
@@ -20,6 +28,11 @@ import type { NoteFile } from '@/lib/notes/types';
 import { FileTree } from './FileTree';
 import { MarkdownView } from './MarkdownView';
 import { NoteEditor } from './NoteEditor';
+
+const SIDEBAR_MIN = 180;
+const SIDEBAR_MAX = 560;
+const SIDEBAR_DEFAULT = 288;
+const SIDEBAR_WIDTH_KEY = 'tv-notes-sidebar-width';
 
 interface NotesBrowserProps {
   projectId: string;
@@ -73,6 +86,7 @@ export function NotesBrowser({
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const pendingHeading = useRef<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -198,10 +212,63 @@ export function NotesBrowser({
     return all;
   }, [query, expanded, visibleFiles]);
 
+  // Restore the persisted file-panel width.
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(saved) && saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX)
+      setSidebarWidth(saved);
+  }, []);
+
+  // Drag the divider to resize the file panel; persist the width on release.
+  const startResize = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = sidebarWidth;
+      const onMove = (ev: MouseEvent): void => {
+        setSidebarWidth(
+          Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + (ev.clientX - startX))),
+        );
+      };
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        setSidebarWidth((w) => {
+          try {
+            localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
+          } catch {
+            /* storage may be unavailable; the width still applies for the session */
+          }
+          return w;
+        });
+      };
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [sidebarWidth],
+  );
+
+  // Download a folder as a .zip (the GET carries the session cookie).
+  const downloadFolder = useCallback(
+    (folderPath: string) => {
+      const a = document.createElement('a');
+      a.href = `/api/projects/${projectId}/folders/download?path=${encodeURIComponent(folderPath)}`;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    },
+    [projectId],
+  );
+
   return (
     <div className="bg-card flex h-full overflow-hidden rounded-lg border">
       {/* Sidebar */}
-      <aside className="flex w-72 shrink-0 flex-col border-r">
+      <aside className="flex shrink-0 flex-col" style={{ width: sidebarWidth }}>
         <div className="border-b p-2">
           <div className="relative">
             <SearchIcon className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2" />
@@ -231,9 +298,22 @@ export function NotesBrowser({
             expanded={effectiveExpanded}
             onToggleFolder={onToggleFolder}
             onSelectFile={(f) => openFile(f, null)}
+            onDownloadFolder={downloadFolder}
+            downloadLabel={t('downloadFolder')}
           />
         </div>
       </aside>
+
+      {/* Draggable divider — resize the file panel */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={startResize}
+        className="group relative w-1.5 shrink-0 cursor-col-resize"
+        title={t('resizeHandle')}
+      >
+        <div className="bg-border mx-auto h-full w-px transition-colors group-hover:bg-sky-500/60" />
+      </div>
 
       {/* Content */}
       <main ref={contentRef} className="flex min-w-0 flex-1 flex-col overflow-hidden">
