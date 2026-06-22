@@ -8,35 +8,43 @@ import { authenticateRequest, getMaxFileSize } from '@/lib/auth/authenticate';
 import { canEditFiles, canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
 import { deleteProjectFile, readProjectFileStream, writeProjectFile } from '@/lib/files/storage';
 import { recordFileVersion } from '@/lib/files/versioning';
+import { corsPreflight, withCors } from '@/lib/http/cors';
 
 interface RouteContext {
   params: Promise<{ id: string; fileId: string }>;
 }
 
+export async function OPTIONS(request: Request): Promise<Response> {
+  return corsPreflight(request);
+}
+
 export async function GET(request: Request, context: RouteContext): Promise<Response> {
   const user = await authenticateRequest(request);
-  if (!user) return errors.unauthorized();
+  if (!user) return withCors(errors.unauthorized(), request);
 
   const { id, fileId } = await context.params;
   const access = await loadProjectAccess(user, id);
-  if (!access) return errors.notFound('Проект не найден');
-  if (!canViewProject(user, access)) return errors.forbidden();
+  if (!access) return withCors(errors.notFound('Проект не найден'), request);
+  if (!canViewProject(user, access)) return withCors(errors.forbidden(), request);
 
   const file = await prisma.vaultFile.findFirst({
     where: { id: fileId, projectId: id, deletedAt: null },
     select: { path: true, mimeType: true, size: true },
   });
-  if (!file) return errors.notFound('Файл не найден');
+  if (!file) return withCors(errors.notFound('Файл не найден'), request);
 
   const stream = readProjectFileStream(id, file.path);
   const webStream = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
-  return new Response(webStream, {
-    status: 200,
-    headers: {
-      'content-type': file.mimeType ?? 'application/octet-stream',
-      'content-length': file.size.toString(),
-    },
-  });
+  return withCors(
+    new Response(webStream, {
+      status: 200,
+      headers: {
+        'content-type': file.mimeType ?? 'application/octet-stream',
+        'content-length': file.size.toString(),
+      },
+    }),
+    request,
+  );
 }
 
 export async function PUT(request: Request, context: RouteContext): Promise<NextResponse> {

@@ -10,6 +10,8 @@ import { createIoServer } from '@/socket/server';
 import { generateApiKey } from '@/lib/auth/api-key';
 import { signAccessToken } from '@/lib/auth/jwt';
 import { TEXT_KEY } from '@/lib/crdt/persistence';
+import { readStagedBlob, writeStagedBlob } from '@/lib/files/storage';
+import { sha256OfBuffer } from '@/lib/files/hash';
 import { resetDatabase, testPrisma } from '../db';
 
 let httpServer: HttpServer;
@@ -313,6 +315,63 @@ describe('file:create', () => {
       where: { projectId: project.id, path: 'shared.md' },
     });
     expect(file).not.toBeNull();
+  });
+
+  it('folds a staged blob into the vault for a metadata-only binary create', async () => {
+    // Binary bytes ride REST into the staging area; the socket op is
+    // metadata-only (no `data`). The handler reads the staged blob by hash,
+    // applies it, then removes the staged copy.
+    const { userId: aId, plainKey: aKey } = await bootstrapUserAndKey('A');
+    const project = await createProject(aId);
+
+    const content = Buffer.from('a binary storyboard payload');
+    const contentHash = sha256OfBuffer(content);
+    await writeStagedBlob(project.id, contentHash, content);
+
+    const a = connect(aKey);
+    await new Promise<void>((r) => a.on('connect', () => r()));
+    await emitWithAck(a, 'project:join', { projectId: project.id });
+
+    const ack = await emitWithAck<{ ok: boolean; outcome?: { kind: string } }>(a, 'file:create', {
+      projectId: project.id,
+      clientId: 'client-A',
+      filePath: 'storyboard.png',
+      fileType: 'BINARY',
+      contentHash,
+      size: content.byteLength,
+      // no `data` — bytes come from the staging area
+    });
+    expect(ack.ok).toBe(true);
+
+    const file = await testPrisma.vaultFile.findFirst({
+      where: { projectId: project.id, path: 'storyboard.png' },
+    });
+    expect(file).not.toBeNull();
+    expect(file?.contentHash).toBe(contentHash);
+
+    // The staged blob is consumed once folded in.
+    expect(await readStagedBlob(project.id, contentHash)).toBeNull();
+  });
+
+  it('rejects a metadata-only create when the staged blob is missing', async () => {
+    const { userId: aId, plainKey: aKey } = await bootstrapUserAndKey('A');
+    const project = await createProject(aId);
+
+    const a = connect(aKey);
+    await new Promise<void>((r) => a.on('connect', () => r()));
+    await emitWithAck(a, 'project:join', { projectId: project.id });
+
+    const ack = await emitWithAck<{ ok: boolean; error?: string }>(a, 'file:create', {
+      projectId: project.id,
+      clientId: 'client-A',
+      filePath: 'missing.png',
+      fileType: 'BINARY',
+      contentHash: 'b'.repeat(64),
+      size: 3,
+      // no `data` and nothing staged → must NACK so the client retries.
+    });
+    expect(ack.ok).toBe(false);
+    expect(ack.error).toBe('blob_not_staged');
   });
 
   it('broadcasts the seeded Yjs state alongside file:created for TEXT', async () => {

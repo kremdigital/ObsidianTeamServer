@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createReadStream, type ReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
-import { getProjectRoot, getVersionPath, resolveProjectFile } from './paths';
+import { getProjectRoot, getStagingPath, getVersionPath, resolveProjectFile } from './paths';
 import { sha256OfBuffer, sha256OfFile } from './hash';
 
 export interface FileStat {
@@ -100,7 +100,7 @@ export async function listProjectFiles(projectId: string): Promise<ListedFile[]>
       throw err;
     }
     for (const entry of entries) {
-      if (entry.name === '.versions') continue;
+      if (entry.name === '.versions' || entry.name === '.staging') continue;
       const abs = join(absDir, entry.name);
       if (entry.isDirectory()) {
         await walk(abs);
@@ -150,4 +150,51 @@ export function readVersionSnapshotStream(
   versionNumber: number,
 ): ReadStream {
   return createReadStream(getVersionPath(projectId, fileId, versionNumber));
+}
+
+// -- Staging area for out-of-band binary uploads ------------------------------
+//
+// Binary file bytes are uploaded over REST into the content-addressed staging
+// area, then a metadata-only socket event tells the sync handler to consume
+// them. This keeps large payloads off the Socket.IO channel. The blob is
+// removed once the socket handler folds it into the vault (or by an orphan
+// sweep if the follow-up event never arrives).
+
+/** Atomically write a staged binary blob, keyed by its content hash. */
+export async function writeStagedBlob(
+  projectId: string,
+  contentHash: string,
+  data: Buffer | Uint8Array,
+): Promise<{ size: number; contentHash: string }> {
+  const target = getStagingPath(projectId, contentHash);
+  await mkdir(dirname(target), { recursive: true });
+  const tempPath = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+  await writeFile(tempPath, data);
+  try {
+    await rename(tempPath, target);
+  } catch (err) {
+    await rm(tempPath, { force: true });
+    throw err;
+  }
+  return { size: data.byteLength, contentHash: sha256OfBuffer(data) };
+}
+
+/** Read a staged blob by content hash. Returns `null` when it isn't present. */
+export async function readStagedBlob(
+  projectId: string,
+  contentHash: string,
+): Promise<Buffer | null> {
+  try {
+    return await readFile(getStagingPath(projectId, contentHash));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/** Remove a staged blob. No-op if already gone. */
+export async function deleteStagedBlob(projectId: string, contentHash: string): Promise<void> {
+  await unlink(getStagingPath(projectId, contentHash)).catch((err: NodeJS.ErrnoException) => {
+    if (err.code !== 'ENOENT') throw err;
+  });
 }

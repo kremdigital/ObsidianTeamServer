@@ -4,6 +4,7 @@ import { canEditFiles, loadProjectAccess } from '@/lib/auth/permissions';
 import { applyOperation, type OperationInput } from '@/lib/sync/operation-log';
 import { increment, type VectorClock, parseClock } from '@/lib/sync/vector-clock';
 import { child } from '@/lib/logger';
+import { deleteStagedBlob, readStagedBlob } from '@/lib/files/storage';
 import { getSocketUser, projectRoom } from '../auth';
 
 interface BaseEnvelope {
@@ -18,13 +19,17 @@ type FileCreateMsg = BaseEnvelope & {
   mimeType?: string | null;
   contentHash: string;
   size: number;
-  data: number[]; // base64 would be lighter; numbers[] is simpler over JSON
+  // Inline bytes — sent by TEXT files (small) and legacy clients. Newer clients
+  // omit this for BINARY files: the bytes are uploaded out-of-band over REST
+  // (`PUT /blobs/:hash`) and read from the staging area by `contentHash`, which
+  // keeps multi-megabyte payloads off the Socket.IO channel.
+  data?: number[];
 };
 type FileUpdateBinaryMsg = BaseEnvelope & {
   fileId: string;
   contentHash: string;
   size: number;
-  data: number[];
+  data?: number[];
 };
 type FileDeleteMsg = BaseEnvelope & { fileId: string; filePath: string };
 type FileMoveMsg = BaseEnvelope & { fileId: string; filePath: string; newPath: string };
@@ -61,6 +66,12 @@ export function attachFileHandlers(io: Server, socket: Socket): void {
     const auth = await withEditAccess(socket, raw.projectId, ack);
     if (!auth.ok) return;
 
+    const bytes = await resolveOpBytes(raw.projectId, raw.contentHash, raw.data);
+    if (!bytes) {
+      ack({ ok: false, error: 'blob_not_staged' });
+      return;
+    }
+
     const op: OperationInput = {
       opType: 'CREATE',
       filePath: raw.filePath,
@@ -70,7 +81,7 @@ export function attachFileHandlers(io: Server, socket: Socket): void {
         contentHash: raw.contentHash,
         size: raw.size,
       },
-      data: Buffer.from(raw.data),
+      data: bytes.data,
     };
 
     try {
@@ -83,6 +94,9 @@ export function attachFileHandlers(io: Server, socket: Socket): void {
         },
         op,
       );
+      if (bytes.staged) {
+        await deleteStagedBlob(raw.projectId, raw.contentHash).catch(() => undefined);
+      }
       io.to(projectRoom(raw.projectId)).emit('file:created', {
         result,
         log: serializeLog(result.log),
@@ -124,11 +138,17 @@ export function attachFileHandlers(io: Server, socket: Socket): void {
     const auth = await withEditAccess(socket, raw.projectId, ack);
     if (!auth.ok) return;
 
+    const bytes = await resolveOpBytes(raw.projectId, raw.contentHash, raw.data);
+    if (!bytes) {
+      ack({ ok: false, error: 'blob_not_staged' });
+      return;
+    }
+
     const op: OperationInput = {
       opType: 'UPDATE',
       filePath: '', // resolved by fileId in applyOperation
       payload: { fileId: raw.fileId, contentHash: raw.contentHash, size: raw.size },
-      data: Buffer.from(raw.data),
+      data: bytes.data,
     };
 
     try {
@@ -141,6 +161,9 @@ export function attachFileHandlers(io: Server, socket: Socket): void {
         },
         op,
       );
+      if (bytes.staged) {
+        await deleteStagedBlob(raw.projectId, raw.contentHash).catch(() => undefined);
+      }
       io.to(projectRoom(raw.projectId)).emit('file:updated-binary', {
         fileId: raw.fileId,
         contentHash: raw.contentHash,
@@ -215,6 +238,24 @@ async function handleMove(
     child({ socket: socket.id }).error({ err }, `${opType.toLowerCase()} failed`);
     ack({ ok: false, error: errorMessage(err) });
   }
+}
+
+/**
+ * Resolve the bytes for a CREATE / UPDATE op. Newer clients omit `data` for
+ * binary files and stage the bytes over REST (`PUT /blobs/:hash`); we read them
+ * from the shared storage volume by `contentHash`. Legacy / TEXT clients send
+ * `data` inline. Returns the bytes plus whether they came from the staging area
+ * (so the caller removes the staged blob once the op is applied). Returns `null`
+ * when a staged blob was expected but is missing — the client retries.
+ */
+async function resolveOpBytes(
+  projectId: string,
+  contentHash: string,
+  inline: number[] | undefined,
+): Promise<{ data: Buffer; staged: boolean } | null> {
+  if (inline !== undefined) return { data: Buffer.from(inline), staged: false };
+  const blob = await readStagedBlob(projectId, contentHash);
+  return blob ? { data: blob, staged: true } : null;
 }
 
 function serializeLog(log: { id: string; vectorClock: unknown; createdAt: Date }) {

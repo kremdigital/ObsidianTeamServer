@@ -7,7 +7,11 @@ export class InvalidPathError extends Error {
   }
 }
 
-const FORBIDDEN_NAMES = new Set(['.versions']);
+const FORBIDDEN_NAMES = new Set(['.versions', '.staging']);
+
+/** A content hash must be a bare 64-char lowercase hex string — used as a
+ *  filename in the staging area, so it must never contain path separators. */
+const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 /**
  * Normalize and validate a vault-relative file path.
@@ -70,4 +74,21 @@ export function getProjectRoot(projectId: string): string {
 
 export function getVersionPath(projectId: string, fileId: string, versionNumber: number): string {
   return join(getProjectRoot(projectId), '.versions', fileId, `${versionNumber}.snapshot`);
+}
+
+/**
+ * Resolve the staging path for a content-addressed binary blob.
+ *
+ * Large binary files are uploaded out-of-band over REST into
+ * `<projectRoot>/.staging/<contentHash>` and then referenced by a metadata-only
+ * `file:create` / `file:update-binary` socket event — keeping multi-megabyte
+ * payloads off the Socket.IO channel (which is sized for tiny Yjs ops). The
+ * socket handler and the REST process share the storage volume, so the blob
+ * written by REST is readable by the socket process by hash.
+ */
+export function getStagingPath(projectId: string, contentHash: string): string {
+  if (!SHA256_HEX.test(contentHash)) {
+    throw new InvalidPathError('Invalid content hash');
+  }
+  return join(getProjectRoot(projectId), '.staging', contentHash);
 }

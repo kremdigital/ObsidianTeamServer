@@ -256,14 +256,38 @@ socket.emit('yjs:update', {
 
 ## Бинарные файлы
 
-Yjs не используется. Загрузка через **REST**:
+Yjs не используется. **Байты бинарных файлов НЕ передаются по сокету** — на
+крупных файлах (раскадровки 10–15 MB) они пробивали `maxHttpBufferSize` и роняли
+канал. Вместо этого — **staging через REST + metadata-only socket-операция**:
 
 ```
-POST /api/projects/:id/files (multipart/form-data)
-PUT  /api/projects/:id/files/:fileId   (raw body — обновление)
+PUT /api/projects/:id/blobs/:hash   (raw body; content-addressed staging)
 ```
 
-После успешной загрузки сервер шлёт socket-событие `file:updated-binary` другим клиентам с `contentHash`. Клиенты сами скачивают новый файл через `GET /api/projects/:id/files/:fileId`.
+1. Клиент заливает байты в content-addressed staging: `PUT /blobs/:hash` (тело —
+   сырые байты; сервер проверяет, что `sha256(body) === :hash`, и кладёт во
+   `<projectRoot>/.staging/<hash>`).
+2. Затем эмитит **`file:create` / `file:update-binary` БЕЗ поля `data`** (только
+   метаданные + `contentHash`).
+3. Сервер видит отсутствие `data`, читает staged-блоб по hash с общего диска
+   (web- и socket-процессы делят storage volume), применяет операцию
+   (`applyOperation` → `OperationLog` → broadcast `file:created` /
+   `file:updated-binary`) и удаляет staged-файл. Если блоба нет — ack
+   `{ ok:false, error:'blob_not_staged' }`, клиент повторяет.
+
+> Текстовые файлы по-прежнему шлют контент **inline** в `file:create` (он мал и
+> нужен серверу для сидирования Yjs-дока). `data` опционально: присутствует для
+> TEXT, отсутствует для BINARY.
+
+Пиры скачивают новый файл через `GET /api/projects/:id/files/:fileId`.
+
+**CORS / транспорт плагина.** Бинарные REST-маршруты (`PUT /blobs/:hash`,
+`GET /files/:fileId`, `GET …/versions/:versionId`) отдают CORS-заголовки для
+origin Obsidian (`app://obsidian.md`) и заголовка `X-API-Key`, чтобы плагин мог
+использовать **`fetch`** (стримит большие тела, не блокируя renderer —
+в отличие от `requestUrl`, который буферизует всё тело через IPC и не тянет 15 MB).
+JSON-запросы плагина остаются на `requestUrl`. Прямые `POST /files` /
+`PUT /files/:fileId` сохранены для веб/админки.
 
 ## Оффлайн режим (рекомендация для плагина)
 
@@ -292,5 +316,5 @@ SQLite local journal:
 2. На каждом mount/unmount проекта — `project:join` / `project:leave`.
 3. Для текстовых файлов — отправляй Yjs update'ы как `number[]` (Array.from Uint8Array).
 4. Для метаданных — посылай `file:create / delete / rename / move` через socket.
-5. Для бинарных — REST upload + жди socket-события `file:updated-binary` от других peer'ов.
+5. Для бинарных — `PUT /blobs/:hash` (fetch), затем `file:create` / `file:update-binary` **без `data`**; жди socket-событий от других peer'ов и качай через `GET /files/:fileId`.
 6. Каждое `outcome` проверяй: `conflict_create_renamed` означает, что нужно подкорректировать локальный vault.
