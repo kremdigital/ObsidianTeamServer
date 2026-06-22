@@ -170,43 +170,46 @@ async function applyCreate(
 
   await writeProjectFile(ctx.projectId, pathToUse, op.data);
 
-  // The `findFirst({deletedAt: null})` above only catches *live* rows, but
-  // `@@unique([projectId, path])` doesn't filter tombstones — so if a row
-  // at `pathToUse` was soft-deleted, a fresh `create` blows up on the
-  // unique constraint and the client stays stuck queueing the CREATE on
-  // every retry. Revive the tombstone in place (clear `deletedAt`, replace
-  // content metadata) so re-creating a previously-deleted path Just Works.
-  const tombstone = await prisma.vaultFile.findUnique({
+  // `@@unique([projectId, path])` spans tombstones AND live rows, so a fresh
+  // `create` at `pathToUse` blows up on the unique constraint whenever a row
+  // already sits there — leaving the client stuck retrying the CREATE (and,
+  // with REST-staged binaries, orphaning the staged blob). Two ways that
+  // happens: (1) a soft-deleted row at the path — re-creating a deleted path;
+  // (2) a *live* conflict copy from this same client's earlier
+  // conflict-rename being retried — `<path>.conflict-<clientId>` already
+  // exists. Both are handled by updating the existing row in place instead of
+  // colliding on a duplicate create: revive it if it was a tombstone, or
+  // idempotently refresh the conflict copy's content if it was already live.
+  const atPath = await prisma.vaultFile.findUnique({
     where: { projectId_path: { projectId: ctx.projectId, path: pathToUse } },
-    select: { id: true, deletedAt: true },
+    select: { id: true },
   });
 
-  const file =
-    tombstone && tombstone.deletedAt !== null
-      ? await prisma.vaultFile.update({
-          where: { id: tombstone.id },
-          data: {
-            deletedAt: null,
-            fileType: op.payload.fileType,
-            contentHash: op.payload.contentHash,
-            size: BigInt(op.payload.size),
-            ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
-            ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
-          },
-          select: { id: true, path: true },
-        })
-      : await prisma.vaultFile.create({
-          data: {
-            projectId: ctx.projectId,
-            path: pathToUse,
-            fileType: op.payload.fileType,
-            contentHash: op.payload.contentHash,
-            size: BigInt(op.payload.size),
-            ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
-            ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
-          },
-          select: { id: true, path: true },
-        });
+  const file = atPath
+    ? await prisma.vaultFile.update({
+        where: { id: atPath.id },
+        data: {
+          deletedAt: null,
+          fileType: op.payload.fileType,
+          contentHash: op.payload.contentHash,
+          size: BigInt(op.payload.size),
+          ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
+          ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
+        },
+        select: { id: true, path: true },
+      })
+    : await prisma.vaultFile.create({
+        data: {
+          projectId: ctx.projectId,
+          path: pathToUse,
+          fileType: op.payload.fileType,
+          contentHash: op.payload.contentHash,
+          size: BigInt(op.payload.size),
+          ...(op.payload.mimeType ? { mimeType: op.payload.mimeType } : {}),
+          ...(ctx.authorId ? { lastModifiedById: ctx.authorId } : {}),
+        },
+        select: { id: true, path: true },
+      });
 
   // For TEXT files, seed a Yjs document with the initial content. Without
   // this, project:join's `yjsDocs` payload on a fresh client is empty,

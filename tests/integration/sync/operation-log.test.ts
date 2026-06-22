@@ -173,6 +173,51 @@ describe('applyOperation: CREATE', () => {
     });
     expect(files.map((f) => f.path)).toEqual(['collide.conflict-client-B.md', 'collide.md']);
   });
+
+  it('idempotently re-applies a conflict CREATE retried by the same client', async () => {
+    // The same client retrying a CREATE for a still-diverged path (e.g. a
+    // queued op replayed on reconnect) must NOT collide on the unique
+    // constraint at the already-materialised `.conflict-<clientId>` path —
+    // that left the client stuck retrying forever (and orphaning REST-staged
+    // blobs). The retry idempotently refreshes the existing conflict copy.
+    const { projectId, ownerId } = await seedProject();
+    await applyOperation(
+      { projectId, authorId: ownerId, clientId: 'client-A', vectorClock: { 'client-A': 1 } },
+      {
+        opType: 'CREATE',
+        filePath: 'collide.md',
+        payload: { fileType: 'TEXT', contentHash: 'h1', size: 1 },
+        data: Buffer.from('a'),
+      },
+    );
+    const makeConflict = () =>
+      applyOperation(
+        { projectId, authorId: ownerId, clientId: 'client-B', vectorClock: { 'client-B': 1 } },
+        {
+          opType: 'CREATE',
+          filePath: 'collide.md',
+          payload: { fileType: 'TEXT', contentHash: 'h2', size: 1 },
+          data: Buffer.from('b'),
+        },
+      );
+
+    const first = await makeConflict();
+    expect(first.outcome.kind).toBe('conflict_create_renamed');
+
+    // The retry must not throw (was: Unique constraint failed on (projectId, path)).
+    const retry = await makeConflict();
+    expect(retry.outcome.kind).toBe('conflict_create_renamed');
+    if (retry.outcome.kind === 'conflict_create_renamed') {
+      expect(retry.outcome.finalPath).toBe('collide.conflict-client-B.md');
+    }
+
+    // Still exactly two files — no duplicate conflict copy, no crash.
+    const files = await testPrisma.vaultFile.findMany({
+      where: { projectId },
+      orderBy: { path: 'asc' },
+    });
+    expect(files.map((f) => f.path)).toEqual(['collide.conflict-client-B.md', 'collide.md']);
+  });
 });
 
 describe('applyOperation: DELETE > UPDATE', () => {
