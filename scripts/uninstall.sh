@@ -67,6 +67,24 @@ if id "${SERVICE_USER}" >/dev/null 2>&1; then
   echo "✓ PM2 services removed"
 fi
 
+# 1b. Backup-retention timer and the fail2ban jail installed by install.sh.
+# Both are ours alone (fail2ban itself and other jails are left untouched).
+if [[ -f /etc/systemd/system/team-vault-prune-backups.timer ]]; then
+  systemctl disable --now team-vault-prune-backups.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/team-vault-prune-backups.timer \
+        /etc/systemd/system/team-vault-prune-backups.service \
+        /usr/local/sbin/team-vault-prune-backups
+  systemctl daemon-reload
+  echo "✓ Backup-retention timer removed (backups in /var/backups/team-vault kept)"
+fi
+
+if [[ -f /etc/fail2ban/jail.d/caddy-nextjs-action.conf ]]; then
+  rm -f /etc/fail2ban/jail.d/caddy-nextjs-action.conf \
+        /etc/fail2ban/filter.d/caddy-nextjs-action.conf
+  fail2ban-client reload >/dev/null 2>&1 || true
+  echo "✓ fail2ban jail caddy-nextjs-action removed"
+fi
+
 # 2. Caddy: remove site block — we just delete the whole Caddyfile and reload,
 # since this installer creates a single-host file. Operators with custom mixed
 # Caddyfiles should remove the host manually.

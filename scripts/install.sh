@@ -408,6 +408,70 @@ ensure_envsubst() {
   fi
 }
 
+# ---- fail2ban ---------------------------------------------------------------
+# Blocks scanners probing Next.js Server Actions. They hit the site with a
+# `Next-Action` header carrying junk ids; Next.js answers 404 and the service is
+# unaffected, but the noise buried the error log (26k lines in three months on
+# the reference deploy). See config/fail2ban/*.conf for the matching rules.
+configure_fail2ban() {
+  local filter_src="${INSTALL_DIR}/config/fail2ban/caddy-nextjs-action.filter.conf"
+  local jail_src="${INSTALL_DIR}/config/fail2ban/caddy-nextjs-action.jail.conf"
+
+  if [[ ! -f "${filter_src}" || ! -f "${jail_src}" ]]; then
+    warn "fail2ban templates missing in ${INSTALL_DIR}/config/fail2ban — skipping"
+    return 0
+  fi
+
+  if ! command -v fail2ban-client >/dev/null 2>&1; then
+    log "Installing fail2ban..."
+    apt-get install -y fail2ban
+  fi
+
+  log "Configuring fail2ban jail for Server Action scanners..."
+  install -D -m 0644 "${filter_src}" /etc/fail2ban/filter.d/caddy-nextjs-action.conf
+  install -D -m 0644 "${jail_src}" /etc/fail2ban/jail.d/caddy-nextjs-action.conf
+
+  systemctl enable fail2ban >/dev/null 2>&1 || true
+  systemctl start fail2ban >/dev/null 2>&1 || true
+
+  # The jail tails Caddy's access log; if Caddy hasn't written one yet fail2ban
+  # would refuse to start the jail. Create it empty so a fresh install is clean.
+  install -d -o caddy -g caddy /var/log/caddy 2>/dev/null || install -d /var/log/caddy
+  [[ -f /var/log/caddy/access.log ]] || : > /var/log/caddy/access.log
+
+  if fail2ban-client reload >/dev/null 2>&1; then
+    ok "fail2ban jail caddy-nextjs-action active"
+  else
+    warn "fail2ban reload failed — check: fail2ban-client -t"
+  fi
+}
+
+# ---- Backup retention -------------------------------------------------------
+# One-off backups (pg_dump, storage tarballs) go to /var/backups/team-vault and
+# are pruned after RETENTION_DAYS by a systemd timer. Without this they pile up
+# in /root indefinitely — 648 MB of stale dumps on the reference deploy.
+configure_backup_prune() {
+  local script_src="${INSTALL_DIR}/scripts/team-vault-prune-backups"
+  local unit_dir="${INSTALL_DIR}/config/systemd"
+
+  if [[ ! -f "${script_src}" || ! -f "${unit_dir}/team-vault-prune-backups.timer" ]]; then
+    warn "backup-prune templates missing — skipping"
+    return 0
+  fi
+
+  log "Installing backup retention timer..."
+  install -d -m 0750 -o root -g root /var/backups/team-vault
+  install -m 0755 "${script_src}" /usr/local/sbin/team-vault-prune-backups
+  install -m 0644 "${unit_dir}/team-vault-prune-backups.service" \
+    /etc/systemd/system/team-vault-prune-backups.service
+  install -m 0644 "${unit_dir}/team-vault-prune-backups.timer" \
+    /etc/systemd/system/team-vault-prune-backups.timer
+
+  systemctl daemon-reload
+  systemctl enable --now team-vault-prune-backups.timer >/dev/null 2>&1
+  ok "Backup retention: /var/backups/team-vault, pruned daily after 30 days"
+}
+
 # ---- Final ------------------------------------------------------------------
 finalize() {
   cat <<EOF
@@ -419,12 +483,15 @@ ${COLOR_GREEN}✓ Team Vault installed.${COLOR_RESET}
   App directory: ${INSTALL_DIR}
   Logs:          ${LOG_DIR}
   Storage:       ${STORAGE_DIR}
+  Backups:       /var/backups/team-vault (pruned daily after 30 days)
 
 Useful commands:
   sudo -u ${SERVICE_USER} pm2 status
   sudo -u ${SERVICE_USER} pm2 logs team-vault-web
   sudo -u ${SERVICE_USER} pm2 logs team-vault-socket
   sudo systemctl status caddy
+  sudo fail2ban-client status caddy-nextjs-action
+  sudo team-vault-prune-backups --dry-run
 
 Re-run this script to upgrade to a newer commit (it's idempotent).
 EOF
@@ -453,6 +520,10 @@ main() {
   install_pm2
   start_services
   configure_caddy
+  # After configure_caddy: the jail tails Caddy's access log, so the log
+  # directory and format must already be in place.
+  configure_fail2ban
+  configure_backup_prune
   finalize
 }
 

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Prune stale Team Vault backups.
+#
+# One-off backups taken before risky operations (pg_dump, tarballs of
+# /var/lib/team-vault, CSV dumps of rows about to be deleted) belong in
+# BACKUP_DIR. This removes anything older than RETENTION_DAYS — files and the
+# directories left empty behind them.
+#
+# Installed to /usr/local/sbin/team-vault-prune-backups by
+# `scripts/install.sh`; run daily by team-vault-prune-backups.timer.
+#
+# Usage: team-vault-prune-backups [--dry-run]
+# =============================================================================
+set -euo pipefail
+
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/team-vault}"
+RETENTION_DAYS="${RETENTION_DAYS:-30}"
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+if [ ! -d "$BACKUP_DIR" ]; then
+  echo "$BACKUP_DIR does not exist — nothing to prune"
+  exit 0
+fi
+
+# Guard against a typo in BACKUP_DIR turning this into a system-wide delete.
+case "$BACKUP_DIR" in
+  /var/backups/*) ;;
+  *)
+    echo "REFUSING: BACKUP_DIR=$BACKUP_DIR is outside /var/backups" >&2
+    exit 1
+    ;;
+esac
+
+before_files=$(find "$BACKUP_DIR" -mindepth 1 -type f | wc -l)
+before_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
+
+# -depth so a directory's contents are visited before the directory itself;
+# otherwise `-delete` can't remove the now-empty directory in the same pass.
+# A directory whose mtime was refreshed by those deletions is collected on the
+# next run.
+mapfile -t stale < <(find "$BACKUP_DIR" -mindepth 1 -depth -mtime "+${RETENTION_DAYS}" -print)
+
+if [ "${#stale[@]}" -eq 0 ]; then
+  echo "nothing older than ${RETENTION_DAYS}d; ${BACKUP_DIR}: ${before_files} files, ${before_size}"
+  exit 0
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "DRY RUN — would delete ${#stale[@]} entries (older than ${RETENTION_DAYS}d):"
+  printf '   %s\n' "${stale[@]}"
+  exit 0
+fi
+
+find "$BACKUP_DIR" -mindepth 1 -depth -mtime "+${RETENTION_DAYS}" -delete
+
+after_files=$(find "$BACKUP_DIR" -mindepth 1 -type f | wc -l)
+after_size=$(du -sh "$BACKUP_DIR" 2>/dev/null | cut -f1)
+echo "deleted ${#stale[@]} entries older than ${RETENTION_DAYS}d"
+echo "files: ${before_files} -> ${after_files}; size: ${before_size} -> ${after_size}"

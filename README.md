@@ -56,10 +56,37 @@ sudo bash /tmp/team-vault/scripts/install.sh
 5. применяет миграции Prisma и запускает seed (создаёт супер-админа);
 6. собирает приложение (`next build` + `tsup` для socket-процесса);
 7. запускает обе службы под PM2 + systemd (`pm2 startup`);
-8. подставляет домен в `Caddyfile` и перезагружает Caddy.
+8. подставляет домен в `Caddyfile` и перезагружает Caddy;
+9. ставит **fail2ban-jail** `caddy-nextjs-action` — отсекает сканеры, долбящие
+   Server Actions Next.js (шаблоны — `config/fail2ban/`);
+10. заводит `/var/backups/team-vault` и **таймер очистки бэкапов**
+    `team-vault-prune-backups.timer` (шаблоны — `config/systemd/`).
 
 После установки откройте `https://<ваш-домен>` — Caddy автоматически выпустит
 сертификат Let's Encrypt.
+
+### Защита от сканеров и хранение бэкапов
+
+**fail2ban.** Jail `caddy-nextjs-action` читает JSON-лог Caddy и банит адреса,
+которые шлют заголовок `Next-Action` с мусорным идентификатором (`x`, `1`,
+`test`). Настоящий id — hex-хеш из 40+ символов, поэтому живые клиенты под
+правило не попадают, в том числе со страниц от прошлого деплоя. Бан на 1 час
+после 5 попыток за 10 минут и **только по портам 80/443** — SSH этим jail'ом
+заблокировать нельзя.
+
+```bash
+sudo fail2ban-client status caddy-nextjs-action
+```
+
+**Бэкапы.** Разовые бэкапы перед рискованными операциями складывайте в
+`/var/backups/team-vault` — таймер ежедневно удаляет оттуда всё старше 30 суток
+(и файлы, и опустевшие каталоги). Ретенция задаётся `Environment=RETENTION_DAYS`
+в `/etc/systemd/system/team-vault-prune-backups.service`. Нужно хранить дольше —
+держите вне этого каталога.
+
+```bash
+sudo team-vault-prune-backups --dry-run
+```
 
 ### Неинтерактивная установка
 

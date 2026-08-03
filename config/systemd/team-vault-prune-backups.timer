@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily prune of stale Team Vault backups
+
+[Timer]
+OnCalendar=daily
+# Spread the run out so it doesn't collide with log rotation and other nightly work.
+RandomizedDelaySec=1h
+# Catch up on a run missed while the server was powered off.
+Persistent=true
+Unit=team-vault-prune-backups.service
+
+[Install]
+WantedBy=timers.target

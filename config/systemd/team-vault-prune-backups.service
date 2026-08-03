@@ -1,0 +1,22 @@
+[Unit]
+Description=Prune stale Team Vault backups
+Documentation=file:///usr/local/sbin/team-vault-prune-backups
+ConditionPathExists=/var/backups/team-vault
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/team-vault-prune-backups
+Environment=RETENTION_DAYS=30
+Environment=BACKUP_DIR=/var/backups/team-vault
+
+# The script only ever needs its own directory; everything else stays read-only,
+# so a bug in it cannot reach the rest of the filesystem.
+ProtectSystem=strict
+ReadWritePaths=/var/backups/team-vault
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
