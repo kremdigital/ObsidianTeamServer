@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { Readable } from 'node:stream';
 import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { prisma } from '@/lib/db/client';
@@ -121,7 +122,6 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
   });
   if (!file) return errors.notFound('Файл не найден');
 
-  // Validate new path; conflict check via unique index.
   const { moveProjectFile } = await import('@/lib/files/storage');
   const { InvalidPathError, normalizeVaultPath } = await import('@/lib/files/paths');
 
@@ -135,12 +135,50 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
     throw err;
   }
 
-  await moveProjectFile(id, file.path, normalizedNew);
-  const updated = await prisma.vaultFile.update({
-    where: { id: fileId },
-    data: { path: normalizedNew, lastModifiedById: user.id },
-    select: { id: true, path: true },
+  if (file.path === normalizedNew) {
+    return NextResponse.json({ file: { id: fileId, path: normalizedNew } });
+  }
+
+  // Занятость целевого пути проверяем ДО того, как тронуть диск.
+  //
+  // `moveProjectFile` — это `rename(src, dst)`, а POSIX `rename` молча затирает
+  // назначение. Раньше перенос выполнялся первым, и при конфликте содержимое
+  // файла-назначения уничтожалось, а следом падало обновление БД (`P2002`,
+  // необработанный → HTTP 500): диск и БД расходились, обе заметки переставали
+  // читаться. Поэтому: сначала отказ, диск не трогаем.
+  //
+  // Тумбстоуны считаются занятыми: `@@unique([projectId, path])` покрывает и
+  // удалённые строки, так что путь мягко удалённого файла переиспользовать
+  // нельзя — то же поведение, что у `POST /files`.
+  const occupant = await prisma.vaultFile.findUnique({
+    where: { projectId_path: { projectId: id, path: normalizedNew } },
+    select: { id: true },
   });
+  if (occupant && occupant.id !== fileId) {
+    return errors.conflict('path_exists', 'Файл с таким путём уже существует');
+  }
+
+  // Диск двигаем внутри транзакции: сбой переноса откатывает и запись в БД,
+  // поэтому несогласованного состояния не остаётся ни при одном из исходов.
+  let updated: { id: string; path: string };
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.vaultFile.update({
+        where: { id: fileId },
+        data: { path: normalizedNew, lastModifiedById: user.id },
+        select: { id: true, path: true },
+      });
+      await moveProjectFile(id, file.path, normalizedNew);
+      return row;
+    });
+  } catch (err) {
+    // Страховка от гонки: между проверкой выше и обновлением путь мог занять
+    // параллельный запрос.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return errors.conflict('path_exists', 'Файл с таким путём уже существует');
+    }
+    throw err;
+  }
 
   return NextResponse.json({ file: updated });
 }
