@@ -7,6 +7,7 @@ import { getSocketUser, installAuthMiddleware } from './auth';
 import { attachProjectHandlers } from './handlers/project';
 import { attachFileHandlers } from './handlers/files';
 import { attachYjsHandlers } from './handlers/yjs';
+import { attachRestBridge } from './rest-bridge';
 
 export interface CreateSocketOptions {
   /** When provided, attach to an existing HTTP server instead of creating one. Useful for tests. */
@@ -67,6 +68,11 @@ export async function runStandaloneServer(opts: RunServerOptions = {}): Promise<
   const port = opts.port ?? Number(process.env.PORT_SOCKET ?? 3001);
   const { io, httpServer } = createIoServer();
 
+  // Мост из веб-процесса: правки, сделанные через REST (MCP, внешние клиенты),
+  // приходят каналом Postgres и рассылаются в комнату проекта. Без него такие
+  // правки не доходят до клиентов вовсе — см. src/lib/realtime/bridge.ts.
+  const restBridge = attachRestBridge(io);
+
   await new Promise<void>((resolve) => {
     httpServer.listen(port, () => resolve());
   });
@@ -82,9 +88,11 @@ export async function runStandaloneServer(opts: RunServerOptions = {}): Promise<
     io.close();
     httpServer.close();
 
-    // Disconnect any remaining sockets and disconnect Prisma.
+    // Disconnect any remaining sockets, close the REST bridge (it holds its own
+    // long-lived pg connection for LISTEN), and disconnect Prisma.
     const sockets = await io.fetchSockets();
     for (const s of sockets) s.disconnect(true);
+    await restBridge.close().catch(() => undefined);
     await prisma.$disconnect().catch(() => undefined);
 
     logger.info('graceful shutdown done');

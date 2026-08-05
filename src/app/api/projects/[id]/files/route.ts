@@ -5,8 +5,8 @@ import { prisma } from '@/lib/db/client';
 import { errors } from '@/lib/http/errors';
 import { authenticateRequest, getMaxFileSize } from '@/lib/auth/authenticate';
 import { canEditFiles, canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
-import { writeProjectFile } from '@/lib/files/storage';
 import { InvalidPathError, normalizeVaultPath } from '@/lib/files/paths';
+import { sha256OfBuffer } from '@/lib/files/hash';
 import { recordFileVersion } from '@/lib/files/versioning';
 
 export async function GET(
@@ -24,10 +24,24 @@ export async function GET(
   const url = new URL(request.url);
   const includeDeleted = url.searchParams.get('includeDeleted') === 'true';
 
+  // Фильтры для клиентов, которым нужен один файл или поддерево, а не весь
+  // проект. Без них резолв «путь → fileId» вынуждает выгружать список целиком:
+  // на вальте в ~1000 заметок это ~100 КБ JSON и `findMany` по всему проекту на
+  // КАЖДУЮ операцию (см. TeamVaultMCP `findByPath`).
+  //
+  // `path` идёт по индексу `@@unique([projectId, path])`. Ответ сохраняет форму
+  // `{ files: [...] }` и на несуществующем пути отдаёт пустой массив, а не 404:
+  // вызывающему проще отличить «нет файла» от «нет проекта», а клиенты,
+  // проверяющие отсутствие пути перед созданием, не ломаются.
+  const pathFilter = url.searchParams.get('path');
+  const prefixFilter = url.searchParams.get('prefix');
+
   const files = await prisma.vaultFile.findMany({
     where: {
       projectId: id,
       ...(includeDeleted ? {} : { deletedAt: null }),
+      ...(pathFilter ? { path: pathFilter } : {}),
+      ...(prefixFilter ? { path: { startsWith: prefixFilter } } : {}),
     },
     select: {
       id: true,
@@ -94,8 +108,6 @@ export async function POST(
 
   const buffer = Buffer.from(await rawFile.arrayBuffer());
 
-  const written = await writeProjectFile(id, normalizedPath, buffer);
-
   const detectedMime =
     typeof rawFile.type === 'string' && rawFile.type.length > 0
       ? rawFile.type
@@ -103,44 +115,76 @@ export async function POST(
 
   const fileType: FileType = isTextLike(normalizedPath, detectedMime) ? 'TEXT' : 'BINARY';
 
+  // Живой файл на этом пути — конфликт. Проверяем явно, до применения операции:
+  // `applyOperation` в этом случае увёл бы файл в `<path>.conflict-<clientId>`,
+  // что уместно для офлайн-клиента, но не для явного вызова API (см.
+  // docs/sync-protocol.md). Тумбстоун конфликтом НЕ считается — `applyCreate`
+  // оживит строку, как это делает сокетный путь.
+  const live = await prisma.vaultFile.findFirst({
+    where: { projectId: id, path: normalizedPath, deletedAt: null },
+    select: { id: true },
+  });
+  if (live) {
+    return errors.conflict('path_exists', 'Файл с таким путём уже существует');
+  }
+
+  // Через общий механизм: журнал операций, засев Yjs для текста, оживление
+  // тумбстоуна и рассылка подключённым клиентам. Раньше здесь была прямая
+  // запись в БД — из-за неё правки через REST не доходили до плагина.
+  const { applyRestOperation } = await import('@/lib/sync/rest-write');
+  const contentHash = sha256OfBuffer(buffer);
+  let result;
   try {
-    const file = await prisma.vaultFile.create({
-      data: {
-        projectId: id,
-        path: normalizedPath,
-        fileType,
-        contentHash: written.contentHash,
-        size: BigInt(written.size),
-        mimeType: detectedMime,
-        lastModifiedById: user.id,
-      },
-      select: {
-        id: true,
-        path: true,
-        fileType: true,
-        contentHash: true,
-        size: true,
-        mimeType: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    await recordFileVersion({
+    result = await applyRestOperation({
       projectId: id,
-      fileId: file.id,
-      data: buffer,
-      contentHash: written.contentHash,
-      authorId: user.id,
+      userId: user.id,
+      op: {
+        opType: 'CREATE',
+        filePath: normalizedPath,
+        payload: {
+          fileType,
+          mimeType: detectedMime,
+          contentHash,
+          size: buffer.byteLength,
+        },
+        data: buffer,
+      },
     });
-
-    return NextResponse.json({ file: { ...file, size: file.size.toString() } }, { status: 201 });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       return errors.conflict('path_exists', 'Файл с таким путём уже существует');
     }
     throw err;
   }
+
+  const fileId = 'fileId' in result.outcome ? result.outcome.fileId : null;
+  if (!fileId) {
+    return errors.conflict('path_exists', 'Файл с таким путём уже существует');
+  }
+
+  const file = await prisma.vaultFile.findUniqueOrThrow({
+    where: { id: fileId },
+    select: {
+      id: true,
+      path: true,
+      fileType: true,
+      contentHash: true,
+      size: true,
+      mimeType: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  await recordFileVersion({
+    projectId: id,
+    fileId: file.id,
+    data: buffer,
+    contentHash,
+    authorId: user.id,
+  });
+
+  return NextResponse.json({ file: { ...file, size: file.size.toString() } }, { status: 201 });
 }
 
 function isTextLike(path: string, mime: string): boolean {

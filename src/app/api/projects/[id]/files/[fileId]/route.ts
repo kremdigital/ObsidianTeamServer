@@ -7,7 +7,8 @@ import { prisma } from '@/lib/db/client';
 import { errors, parseJsonBody } from '@/lib/http/errors';
 import { authenticateRequest, getMaxFileSize } from '@/lib/auth/authenticate';
 import { canEditFiles, canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
-import { deleteProjectFile, readProjectFileStream, writeProjectFile } from '@/lib/files/storage';
+import { readProjectFileStream } from '@/lib/files/storage';
+import { sha256OfBuffer } from '@/lib/files/hash';
 import { recordFileVersion } from '@/lib/files/versioning';
 import { corsPreflight, withCors } from '@/lib/http/cors';
 
@@ -59,7 +60,7 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
 
   const file = await prisma.vaultFile.findFirst({
     where: { id: fileId, projectId: id },
-    select: { path: true, deletedAt: true },
+    select: { path: true, deletedAt: true, fileType: true },
   });
   if (!file || file.deletedAt) return errors.notFound('Файл не найден');
 
@@ -69,15 +70,26 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
     return errors.invalid('file_too_large', `Файл больше ${max} байт`);
   }
 
-  const written = await writeProjectFile(id, file.path, buffer);
-
-  const updated = await prisma.vaultFile.update({
-    where: { id: fileId },
-    data: {
-      contentHash: written.contentHash,
-      size: BigInt(written.size),
-      lastModifiedById: user.id,
+  // Через общий механизм: запись на диск, журнал операций, пересборка Yjs для
+  // текста и рассылка клиентам. Прямая запись мимо него оставляла CRDT со
+  // старым текстом — клиент получал устаревшее содержимое и возвращал его назад.
+  const { applyRestOperation } = await import('@/lib/sync/rest-write');
+  const contentHash = sha256OfBuffer(buffer);
+  await applyRestOperation({
+    projectId: id,
+    userId: user.id,
+    fileType: file.fileType,
+    ...(file.fileType === 'TEXT' ? { textContent: buffer.toString('utf8') } : {}),
+    op: {
+      opType: 'UPDATE',
+      filePath: file.path,
+      payload: { fileId, contentHash, size: buffer.byteLength },
+      data: buffer,
     },
+  });
+
+  const updated = await prisma.vaultFile.findUniqueOrThrow({
+    where: { id: fileId },
     select: {
       id: true,
       path: true,
@@ -93,7 +105,7 @@ export async function PUT(request: Request, context: RouteContext): Promise<Next
     projectId: id,
     fileId,
     data: buffer,
-    contentHash: written.contentHash,
+    contentHash,
     authorId: user.id,
   });
 
@@ -160,6 +172,11 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
 
   // Диск двигаем внутри транзакции: сбой переноса откатывает и запись в БД,
   // поэтому несогласованного состояния не остаётся ни при одном из исходов.
+  //
+  // Здесь применяется не `applyRestOperation`, а прямое обновление: сокетный
+  // `applyMove` при коллизии уводит файл в `<path>.conflict-<clientId>`, что
+  // для явного вызова API неверно (нужен отказ). Журнал и рассылка добавляются
+  // ниже отдельно — операция должна дойти до клиентов так же, как остальные.
   let updated: { id: string; path: string };
   try {
     updated = await prisma.$transaction(async (tx) => {
@@ -180,6 +197,18 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
     throw err;
   }
 
+  // Журнал + рассылка. Диск и БД уже согласованы, поэтому ошибка здесь не
+  // должна отменять успешное перемещение — худшее следствие в том, что клиент
+  // узнает о нём при следующей полной сверке.
+  const { recordRestMove } = await import('@/lib/sync/rest-write');
+  await recordRestMove({
+    projectId: id,
+    userId: user.id,
+    fileId,
+    fromPath: file.path,
+    toPath: normalizedNew,
+  }).catch(() => undefined);
+
   return NextResponse.json({ file: updated });
 }
 
@@ -199,11 +228,15 @@ export async function DELETE(_request: Request, context: RouteContext): Promise<
   if (!file) return errors.notFound('Файл не найден');
 
   if (!file.deletedAt) {
-    await prisma.vaultFile.update({
-      where: { id: fileId },
-      data: { deletedAt: new Date(), lastModifiedById: user.id },
+    // Через общий механизм: мягкое удаление, снятие файла с диска, запись в
+    // журнал и рассылка клиентам. Раньше удаление правило БД напрямую и до
+    // подключённых клиентов не доходило.
+    const { applyRestOperation } = await import('@/lib/sync/rest-write');
+    await applyRestOperation({
+      projectId: id,
+      userId: user.id,
+      op: { opType: 'DELETE', filePath: file.path, payload: { fileId } },
     });
-    await deleteProjectFile(id, file.path).catch(() => undefined);
   }
 
   return NextResponse.json({ success: true });
