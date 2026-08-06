@@ -49,15 +49,29 @@ export async function loadYjsDoc(fileId: string): Promise<Y.Doc> {
 export async function applyYjsUpdate(opts: ApplyUpdateOpts): Promise<ApplyUpdateResult> {
   const doc = await loadYjsDoc(opts.fileId);
   const beforeVector = Y.encodeStateVector(doc);
+  const beforeText = doc.getText(TEXT_KEY).toString();
 
   Y.applyUpdate(doc, opts.update);
 
   const afterVector = Y.encodeStateVector(doc);
-  const changed = !uint8Equal(beforeVector, afterVector);
+  const text = doc.getText(TEXT_KEY).toString();
+
+  // ⚠️ Одного сравнения векторов состояния НЕДОСТАТОЧНО. Вектор в Yjs
+  // отражает только ВСТАВКИ (счётчик операций на клиента); удаления живут в
+  // отдельном delete-set и счётчик не двигают. Поэтому правка, состоящая
+  // только из удаления текста, давала `changed === false` — и обработчик
+  // `yjs:update` НЕ планировал снапшот на диск и НЕ рассылал её остальным
+  // клиентам. В CRDT удаление было, а файл на диске (и всё, что читает его:
+  // REST-скачивание, размер в веб-UI, catch-up новых клиентов) оставался со
+  // старым текстом.
+  //
+  // Обнаружено 2026-08-06: пользователь убрал один символ из заметки при
+  // работающем плагине — на сервере файл не изменился. Вставки при этом
+  // синхронизировались нормально, что и маскировало проблему.
+  const changed = !uint8Equal(beforeVector, afterVector) || text !== beforeText;
 
   const newState = Y.encodeStateAsUpdate(doc);
   const newVector = afterVector;
-  const text = doc.getText(TEXT_KEY).toString();
 
   await prisma.yjsDocument.upsert({
     where: { fileId: opts.fileId },
