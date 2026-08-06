@@ -123,7 +123,7 @@ describe('PATCH /api/projects/[id]/files/[fileId] — перемещение', (
     expect(src?.path).toBe('источник.md');
   });
 
-  it('путь, занятый тумбстоуном, тоже считается конфликтом', async () => {
+  it('путь, занятый тумбстоуном, освобождается — перемещение проходит', async () => {
     const { projectId, user, plain } = await seedOwnerWithKey();
     const srcId = await seedFile(projectId, user.id, 'жив.md', 'живой');
     const goneId = await seedFile(projectId, user.id, 'удалён.md', 'удалённый');
@@ -132,10 +132,19 @@ describe('PATCH /api/projects/[id]/files/[fileId] — перемещение', (
       data: { deletedAt: new Date() },
     });
 
+    // POST на путь тумбстоуна оживляет запись, поэтому и PATCH обязан пускать:
+    // иначе заметку не переместить на место ранее удалённой.
     const res = await call(plain, projectId, srcId, 'удалён.md');
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+
     const src = await testPrisma.vaultFile.findUnique({ where: { id: srcId } });
-    expect(src?.path).toBe('жив.md');
+    expect(src?.path).toBe('удалён.md');
+    await expect(readFile(diskPath(projectId, 'удалён.md'), 'utf8')).resolves.toBe('живой');
+
+    // Мёртвая строка уведена на служебный путь — версии и история целы.
+    const gone = await testPrisma.vaultFile.findUnique({ where: { id: goneId } });
+    expect(gone?.path).toBe(`удалён.md.tombstone-${goneId}`);
+    expect(gone?.deletedAt).not.toBeNull();
   });
 
   it('перемещение на собственный путь — успешный no-op', async () => {

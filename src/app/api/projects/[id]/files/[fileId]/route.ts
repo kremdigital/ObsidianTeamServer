@@ -159,16 +159,22 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
   // необработанный → HTTP 500): диск и БД расходились, обе заметки переставали
   // читаться. Поэтому: сначала отказ, диск не трогаем.
   //
-  // Тумбстоуны считаются занятыми: `@@unique([projectId, path])` покрывает и
-  // удалённые строки, так что путь мягко удалённого файла переиспользовать
-  // нельзя — то же поведение, что у `POST /files`.
+  // Конфликтом считается только ЖИВОЙ файл. Тумбстоун путь не держит: `POST
+  // /files` на такой путь оживляет запись, и `PATCH` обязан вести себя так же —
+  // иначе заметку нельзя переместить на место ранее удалённой.
   const occupant = await prisma.vaultFile.findUnique({
     where: { projectId_path: { projectId: id, path: normalizedNew } },
-    select: { id: true },
+    select: { id: true, deletedAt: true },
   });
-  if (occupant && occupant.id !== fileId) {
+  if (occupant && occupant.id !== fileId && occupant.deletedAt === null) {
     return errors.conflict('path_exists', 'Файл с таким путём уже существует');
   }
+
+  // Тумбстоун освобождает путь: `@@unique([projectId, path])` покрывает и
+  // удалённые строки, поэтому просто так занять путь нельзя. Уводим мёртвую
+  // строку на служебный путь (а не удаляем) — так сохраняются её версии и
+  // история, а `purge-tombstones` уберёт её штатно.
+  const tombstoneToFree = occupant && occupant.id !== fileId ? occupant.id : null;
 
   // Диск двигаем внутри транзакции: сбой переноса откатывает и запись в БД,
   // поэтому несогласованного состояния не остаётся ни при одном из исходов.
@@ -180,6 +186,12 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
   let updated: { id: string; path: string };
   try {
     updated = await prisma.$transaction(async (tx) => {
+      if (tombstoneToFree) {
+        await tx.vaultFile.update({
+          where: { id: tombstoneToFree },
+          data: { path: `${normalizedNew}.tombstone-${tombstoneToFree}` },
+        });
+      }
       const row = await tx.vaultFile.update({
         where: { id: fileId },
         data: { path: normalizedNew, lastModifiedById: user.id },
