@@ -46,6 +46,8 @@ describe('канал операций (LISTEN/NOTIFY)', () => {
       logId: 'log-1',
       event: 'file:created',
       clientId: 'rest:u-1',
+      fileId: 'f-1',
+      path: 'заметка.md',
     };
     await publishOperation(note);
 
@@ -68,6 +70,9 @@ describe('канал операций (LISTEN/NOTIFY)', () => {
       logId: 'log-2',
       event: 'file:moved',
       clientId: 'rest:u-2',
+      fileId: 'f-2',
+      path: 'было.md',
+      newPath: 'стало.md',
     };
     await publishOperation(note);
 

@@ -23,7 +23,7 @@ export const OPERATION_CHANNEL = 'team_vault_operation';
 
 export interface OperationNotification {
   projectId: string;
-  /** Строка `OperationLog`, по которой подписчик соберёт событие. */
+  /** Строка `OperationLog`, по которой подписчик достанет vector clock и время. */
   logId: string;
   /** Socket.IO-событие, которое надо разослать в комнату проекта. */
   event: 'file:created' | 'file:updated-binary' | 'file:deleted' | 'file:renamed' | 'file:moved';
@@ -33,6 +33,16 @@ export interface OperationNotification {
    * нужен клиентам, чтобы не принять собственную правку за чужую.
    */
   clientId: string;
+  /**
+   * Идентификаторы для payload события. **Обязательны:** плагин достаёт из
+   * события `fileId`/`path`/`newPath` и без них молча игнорирует сообщение —
+   * см. `obsidian-plugin/src/client/socket.ts` и `handleServerFileEvent`.
+   * Строки короткие, лимит `NOTIFY` (~8000 байт) не задевают.
+   */
+  fileId: string;
+  path: string;
+  newPath?: string;
+  contentHash?: string;
 }
 
 /**

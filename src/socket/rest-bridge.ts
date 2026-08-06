@@ -14,29 +14,68 @@ import { logger } from '@/lib/logger';
 import { projectRoom } from './auth';
 import { subscribeToOperations, type OperationNotification } from '@/lib/realtime/bridge';
 
+export interface SerializedLog {
+  id: string;
+  vectorClock: unknown;
+  createdAt: string;
+}
+
+/**
+ * Собрать payload события в той форме, которую ждёт плагин.
+ *
+ * **Форма обязана совпадать с сокетными обработчиками.** Плагин разбирает
+ * каждое событие по своим полям и при их отсутствии молча выходит
+ * (`if (!data.fileId) return`, `if (!outcome?.fileId) break`) — см.
+ * `obsidian-plugin/src/client/socket.ts` и `engine.handleServerFileEvent`.
+ * Первая версия моста слала `{ log, filePath }`: события доходили, а клиент
+ * не мог их применить — файлы не появлялись в вальте. Отсюда и отдельная
+ * функция с тестом на точную форму.
+ */
+export function buildEventPayload(
+  note: OperationNotification,
+  log: SerializedLog,
+): Record<string, unknown> {
+  switch (note.event) {
+    case 'file:created':
+      // Плагин достаёт fileId и path из `result.outcome`.
+      return {
+        result: { outcome: { kind: 'created', fileId: note.fileId, path: note.path } },
+        log,
+      };
+    case 'file:updated-binary':
+      return { fileId: note.fileId, contentHash: note.contentHash ?? '', log };
+    case 'file:deleted':
+      return { fileId: note.fileId, log };
+    case 'file:renamed':
+    case 'file:moved': {
+      const target = note.newPath ?? note.path;
+      return {
+        fileId: note.fileId,
+        newPath: target,
+        outcome: { kind: 'moved', fileId: note.fileId, path: target },
+        log,
+      };
+    }
+  }
+}
+
 async function relay(io: IOServer, note: OperationNotification): Promise<void> {
-  const log = await prisma.operationLog.findUnique({
+  const row = await prisma.operationLog.findUnique({
     where: { id: note.logId },
-    select: { id: true, vectorClock: true, createdAt: true, filePath: true, newPath: true },
+    select: { id: true, vectorClock: true, createdAt: true },
   });
-  if (!log) {
+  if (!row) {
     logger.warn({ note }, 'операция из канала не найдена в журнале');
     return;
   }
+  const log = { id: row.id, vectorClock: row.vectorClock, createdAt: row.createdAt.toISOString() };
+  const payload = buildEventPayload(note, log);
 
-  // Форма payload повторяет сокетные обработчики (`serializeLog` + result),
-  // но `result.outcome` здесь недоступен: он не хранится в журнале. Клиенту
-  // достаточно самой операции — путь, тип и vector clock; содержимое он
-  // возьмёт обычным путём (REST-скачивание или Yjs).
-  io.to(projectRoom(note.projectId)).emit(note.event, {
-    log: { id: log.id, vectorClock: log.vectorClock, createdAt: log.createdAt.toISOString() },
-    filePath: log.filePath,
-    newPath: log.newPath,
-    clientId: note.clientId,
-    viaRest: true,
-  });
-
-  logger.debug({ event: note.event, path: log.filePath }, 'REST-операция разослана в комнату');
+  io.to(projectRoom(note.projectId)).emit(note.event, { ...payload, viaRest: true });
+  logger.info(
+    { event: note.event, path: note.newPath ?? note.path, fileId: note.fileId },
+    'REST-операция разослана в комнату',
+  );
 }
 
 /**

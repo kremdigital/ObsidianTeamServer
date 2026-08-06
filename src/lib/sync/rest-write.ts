@@ -120,6 +120,9 @@ export async function recordRestMove(opts: {
     logId: log.id,
     event: 'file:moved',
     clientId,
+    fileId: opts.fileId,
+    path: opts.fromPath,
+    newPath: opts.toPath,
   });
 }
 
@@ -146,12 +149,27 @@ export async function applyRestOperation(opts: RestWriteOpts): Promise<ApplyResu
     });
   }
 
-  await publishOperation({
-    projectId: opts.projectId,
-    logId: result.log.id,
-    event: eventFor(opts.op),
-    clientId,
-  });
+  // fileId берём из outcome: при CREATE он выдаётся сервером, при остальных
+  // операциях приходит в payload. Без него плагин игнорирует событие.
+  const fileId =
+    'fileId' in result.outcome
+      ? result.outcome.fileId
+      : 'fileId' in opts.op.payload
+        ? (opts.op.payload as { fileId: string }).fileId
+        : null;
+  const path = 'path' in result.outcome ? result.outcome.path : opts.op.filePath;
+
+  if (fileId) {
+    await publishOperation({
+      projectId: opts.projectId,
+      logId: result.log.id,
+      event: eventFor(opts.op),
+      clientId,
+      fileId,
+      path,
+      ...(opts.op.opType === 'UPDATE' ? { contentHash: opts.op.payload.contentHash } : {}),
+    });
+  }
 
   return result;
 }
