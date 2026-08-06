@@ -69,11 +69,47 @@ async function relay(io: IOServer, note: OperationNotification): Promise<void> {
     return;
   }
   const log = { id: row.id, vectorClock: row.vectorClock, createdAt: row.createdAt.toISOString() };
-  const payload = buildEventPayload(note, log);
+  const room = projectRoom(note.projectId);
 
-  io.to(projectRoom(note.projectId)).emit(note.event, { ...payload, viaRest: true });
+  const file = await prisma.vaultFile.findUnique({
+    where: { id: note.fileId },
+    select: { fileType: true },
+  });
+  const isText = file?.fileType === 'TEXT';
+
+  // Содержимое ТЕКСТОВЫХ файлов в этом протоколе живёт только в Yjs: получив
+  // `file:created`, плагин заводит Y.Doc и ждёт состояние, а сам файл на диск
+  // не пишет (`applyServerCreate` → `wireYjsForTextFile`). Без `yjs:update`
+  // заметка появляется в индексе клиента, но остаётся пустой до переподключения
+  // — ровно это и наблюдалось в первом прогоне живого теста.
+  //
+  // По той же причине для текста НЕ шлём `file:updated-binary`: в сокетном
+  // протоколе такого события для текста не бывает, плагин на него полез бы
+  // качать байты по REST и разбирать конфликт поверх Yjs.
+  const sendYjs = async (): Promise<void> => {
+    const doc = await prisma.yjsDocument.findUnique({
+      where: { fileId: note.fileId },
+      select: { state: true },
+    });
+    if (doc?.state && doc.state.length > 0) {
+      io.to(room).emit('yjs:update', {
+        fileId: note.fileId,
+        update: Array.from(new Uint8Array(doc.state)),
+      });
+    }
+  };
+
+  if (note.event === 'file:updated-binary' && isText) {
+    await sendYjs();
+    logger.info({ path: note.path, fileId: note.fileId }, 'REST-правка текста разослана как yjs');
+    return;
+  }
+
+  io.to(room).emit(note.event, { ...buildEventPayload(note, log), viaRest: true });
+  if (note.event === 'file:created' && isText) await sendYjs();
+
   logger.info(
-    { event: note.event, path: note.newPath ?? note.path, fileId: note.fileId },
+    { event: note.event, path: note.newPath ?? note.path, fileId: note.fileId, isText },
     'REST-операция разослана в комнату',
   );
 }
