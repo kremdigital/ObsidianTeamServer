@@ -15,9 +15,10 @@
  * Здесь всё это собрано в одном месте: `applyOperation` (журнал + диск + Yjs
  * для CREATE) и публикация в канал сокет-процесса.
  */
+import * as Y from 'yjs';
 import { Prisma, type FileType } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
-import { buildInitialState } from '@/lib/crdt/persistence';
+import { loadYjsDoc, TEXT_KEY } from '@/lib/crdt/persistence';
 import { applyOperation, type ApplyResult, type OperationInput } from './operation-log';
 import { increment, parseClock, type VectorClock } from './vector-clock';
 import { publishOperation, type OperationNotification } from '@/lib/realtime/bridge';
@@ -138,14 +139,34 @@ export async function applyRestOperation(opts: RestWriteOpts): Promise<ApplyResu
     opts.op,
   );
 
-  // Пересборка CRDT для текстового UPDATE (см. комментарий к textContent).
+  // Обновление CRDT для текстового UPDATE.
+  //
+  // ⚠️ Документ здесь МУТИРУЕТСЯ, а не подменяется свежим. Замена на
+  // `buildInitialState(newText)` кажется проще, но порождает задвоение: у
+  // такого документа своя история, клиент видит независимую вставку и Yjs
+  // сливает её с уже имеющимся текстом — на диске оказывается старое плюс
+  // новое. Это в точности механизм инцидента 2026-08-03 (см.
+  // `Tasks/done/2026-08-03-INCIDENT-рецидив-задвоения-ополченец.md`), и он
+  // воспроизвёлся при живом тесте MCP.
+  //
+  // При мутации в состояние попадает и УДАЛЕНИЕ прежнего текста, поэтому
+  // клиент, применив новое состояние, сходится к нужному содержимому.
   if (opts.op.opType === 'UPDATE' && opts.fileType === 'TEXT' && opts.textContent !== undefined) {
     const fileId = opts.op.payload.fileId;
-    const { state, stateVector } = buildInitialState(opts.textContent);
+    const doc = await loadYjsDoc(fileId);
+    const text = doc.getText(TEXT_KEY);
+    if (text.toString() !== opts.textContent) {
+      doc.transact(() => {
+        text.delete(0, text.length);
+        text.insert(0, opts.textContent as string);
+      });
+    }
+    const state = Buffer.from(Y.encodeStateAsUpdate(doc));
+    const stateVector = Buffer.from(Y.encodeStateVector(doc));
     await prisma.yjsDocument.upsert({
       where: { fileId },
-      create: { fileId, state: Buffer.from(state), stateVector: Buffer.from(stateVector) },
-      update: { state: Buffer.from(state), stateVector: Buffer.from(stateVector) },
+      create: { fileId, state, stateVector },
+      update: { state, stateVector },
     });
   }
 

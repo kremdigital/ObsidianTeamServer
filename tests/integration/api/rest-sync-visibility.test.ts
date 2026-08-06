@@ -119,6 +119,37 @@ describe('REST-записи видны клиентам синхронизаци
     expect(await yjsText(file.id)).toBe('вторая версия\n');
   });
 
+  it('обновление НЕ задваивает текст у клиента, который уже имеет документ', async () => {
+    const { projectId, plain } = await seedOwnerWithKey();
+    const created = await post(plain, projectId, 'з.md', 'первая версия\n');
+    const { file } = (await created.json()) as { file: { id: string } };
+
+    // Клиент, получивший исходное состояние (как плагин после file:created).
+    const clientDoc = new Y.Doc();
+    const seeded = await testPrisma.yjsDocument.findUniqueOrThrow({ where: { fileId: file.id } });
+    Y.applyUpdate(clientDoc, new Uint8Array(seeded.state));
+    expect(clientDoc.getText(TEXT_KEY).toString()).toBe('первая версия\n');
+
+    await updateFile(
+      new Request('http://localhost/api/projects/x/files/y', {
+        method: 'PUT',
+        headers: { [API_KEY_HEADER]: plain },
+        body: 'вторая версия\n',
+      }),
+      { params: Promise.resolve({ id: projectId, fileId: file.id }) },
+    );
+
+    // Клиент применяет новое состояние поверх своего — как через yjs:update.
+    const after = await testPrisma.yjsDocument.findUniqueOrThrow({ where: { fileId: file.id } });
+    Y.applyUpdate(clientDoc, new Uint8Array(after.state));
+
+    // Регрессия: подмена документа свежим (buildInitialState) давала здесь
+    // «первая версия\nвторая версия\n» — тот же механизм, что в инциденте
+    // задвоения 2026-08-03. Мутация существующего документа несёт удаление
+    // прежнего текста, поэтому клиент сходится к новому.
+    expect(clientDoc.getText(TEXT_KEY).toString()).toBe('вторая версия\n');
+  });
+
   it('перемещение пишет MOVE с обоими путями', async () => {
     const { projectId, plain } = await seedOwnerWithKey();
     const created = await post(plain, projectId, 'старая.md', 'текст\n');
