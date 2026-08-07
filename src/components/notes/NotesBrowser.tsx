@@ -25,6 +25,7 @@ import { ApiError, apiGetText } from '@/lib/api/client';
 import { slugifyHeading } from '@/lib/notes/slug';
 import { ancestorFolderPaths } from '@/lib/notes/tree';
 import type { NoteFile } from '@/lib/notes/types';
+import { AuthedImage } from './AuthedImage';
 import { FileTree } from './FileTree';
 import { MarkdownView } from './MarkdownView';
 import { NoteEditor } from './NoteEditor';
@@ -404,7 +405,7 @@ export function NotesBrowser({
                       }}
                     />
                   ) : isImage(selected) ? (
-                    <img
+                    <AuthedImage
                       src={`/api/projects/${projectId}/files/${selected.id}`}
                       alt={selected.path}
                       className="mx-auto max-w-full rounded-md border"

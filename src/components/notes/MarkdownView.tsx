@@ -18,6 +18,7 @@ import remarkFrontmatter from 'remark-frontmatter';
 import { ExternalLinkIcon, FileTextIcon, LoaderCircleIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { apiGetText } from '@/lib/api/client';
+import { AuthedImage } from './AuthedImage';
 import { remarkWikilink } from '@/lib/notes/remark-wikilink';
 import {
   resolveWikiTarget,
@@ -242,7 +243,7 @@ export function MarkdownView({
           return <span className="text-muted-foreground text-sm italic">[{alt || 'image'}]</span>;
         }
         return (
-          <img
+          <AuthedImage
             src={resolvedSrc}
             alt={alt ?? ''}
             loading="lazy"
