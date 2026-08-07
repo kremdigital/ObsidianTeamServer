@@ -19,6 +19,20 @@ export function safeNext(raw: string | null): string {
 }
 
 /**
+ * Куда возвращать пользователя после попытки обновления.
+ *
+ * Адрес **относительный**, и это принципиально: за Caddy `request.url` содержит
+ * внутренний адрес (`localhost:3000`), поэтому построенный от него абсолютный
+ * URL уводил на несуществующий хост — поймано проверкой на проде уже после
+ * выката. Относительный путь браузер разрешает от текущего origin, то есть от
+ * публичного домена.
+ */
+export function redirectLocation(next: string, refreshed: boolean): string {
+  if (refreshed) return next;
+  return next === '/dashboard' ? '/login' : `/login?next=${encodeURIComponent(next)}`;
+}
+
+/**
  * Обновить сессию и вернуть пользователя туда, куда он шёл.
  *
  * Нужен потому, что `proxy` работает на edge-runtime и не может сам проверить
@@ -37,10 +51,10 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const result = await refreshSessionCookies(request);
 
-  const target = new URL(result.ok ? next : '/login', url.origin);
-  if (!result.ok && next !== '/dashboard') target.searchParams.set('next', next);
-
-  const response = NextResponse.redirect(target);
+  const response = new NextResponse(null, {
+    status: 302,
+    headers: { Location: redirectLocation(next, result.ok) },
+  });
   // Метку ставим в любом случае: при успехе она просто протухнет, при неудаче
   // не даст `proxy` отправить сюда снова по кругу.
   response.cookies.set(REFRESH_ATTEMPT_COOKIE, '1', {
