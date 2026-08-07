@@ -83,3 +83,54 @@ describe('proxy — sliding "Remember me" sessions', () => {
     expect(readSetCookieToken(res)).toBeNull();
   });
 });
+
+/**
+ * Истёкший access при живом refresh больше не выбрасывает на форму входа.
+ *
+ * Раньше `proxy` в этом случае слал на `/login`, хотя сессия действительна ещё
+ * 30 дней: человек отходил на двадцать минут, возвращался, кликал по ссылке — и
+ * оказывался на входе. Теперь он идёт на маршрут обновления и возвращается
+ * туда, куда шёл.
+ */
+describe('proxy — обновление сессии вместо формы входа', () => {
+  const req = (url: string, cookie: string): NextRequest =>
+    new NextRequest(`http://localhost${url}`, { headers: { cookie } });
+
+  const location = (res: Response) =>
+    new URL(res.headers.get('location') ?? '', 'http://localhost');
+
+  it('без access, но с refresh — отправляет на обновление и хранит адрес', async () => {
+    const res = await proxy(req('/projects/p1?tab=notes', 'osync_refresh=r1'));
+    const loc = location(res);
+    expect(loc.pathname).toBe('/api/auth/session-refresh');
+    expect(loc.searchParams.get('next')).toBe('/projects/p1?tab=notes');
+  });
+
+  it('с непроходящим проверку access и живым refresh — тоже на обновление', async () => {
+    // Намеренно без ожидания реального истечения: `proxy` идёт одной и той же
+    // веткой `if (!payload)` и для протухшего, и для битого токена, а сон на
+    // секунду ради этого делал тест плавающим.
+    const broken = 'not.a.valid.jwt';
+    expect(await verifyAccessToken(broken)).toBeNull();
+
+    const res = await proxy(req('/dashboard', `osync_access=${broken}; osync_refresh=r1`));
+    expect(location(res).pathname).toBe('/api/auth/session-refresh');
+  });
+
+  it('без refresh-cookie — по-прежнему на форму входа', async () => {
+    const res = await proxy(req('/dashboard', ''));
+    expect(location(res).pathname).toBe('/login');
+  });
+
+  it('повторный заход с меткой попытки — на форму входа, а не по кругу', async () => {
+    // Метку ставит сам маршрут обновления. Без этой проверки протухший refresh
+    // дал бы бесконечный круг proxy ⇄ обновление.
+    const res = await proxy(req('/dashboard', 'osync_refresh=r1; osync_refresh_attempt=1'));
+    expect(location(res).pathname).toBe('/login');
+  });
+
+  it('незащищённые пути не трогаются', async () => {
+    const res = await proxy(req('/about', ''));
+    expect(res.headers.get('location')).toBeNull();
+  });
+});

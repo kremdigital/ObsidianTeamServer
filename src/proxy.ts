@@ -7,6 +7,10 @@ import {
 } from '@/lib/auth/jwt';
 
 const ACCESS_COOKIE_NAME = 'osync_access';
+const REFRESH_COOKIE_NAME = 'osync_refresh';
+/** Дублирует `REFRESH_ATTEMPT_COOKIE` из маршрута обновления: сюда его не
+ *  импортировать — этот файл на edge-runtime и не должен тянуть серверный код. */
+const REFRESH_ATTEMPT_COOKIE = 'osync_refresh_attempt';
 const isProd = process.env.NODE_ENV === 'production';
 
 const ADMIN_PREFIX = /^\/admin(\/|$)/;
@@ -33,6 +37,33 @@ function redirectToLogin(request: NextRequest): NextResponse {
   const url = new URL('/login', request.url);
   const next = request.nextUrl.pathname + request.nextUrl.search;
   if (next && next !== '/') url.searchParams.set('next', next);
+  return NextResponse.redirect(url);
+}
+
+/**
+ * Попробовать обновить сессию вместо того, чтобы гнать на форму входа.
+ *
+ * Access-токен по умолчанию живёт 15 минут, refresh — 30 дней. Раньше истёкший
+ * access означал редирект на `/login` при любой навигации: человек отходил на
+ * двадцать минут, возвращался, кликал по ссылке — и оказывался на входе, хотя
+ * его сессия действительна ещё месяц.
+ *
+ * Сам `proxy` обновить пару не может: он на edge-runtime, а проверка
+ * refresh-токена требует БД. Поэтому отправляем на `/api/auth/session-refresh`
+ * — обычный серверный маршрут, который обновит cookie и вернёт человека
+ * обратно по `next`.
+ *
+ * Идём туда, только если refresh-cookie есть и мы **ещё не пробовали**: метку
+ * `osync_refresh_attempt` ставит сам маршрут на 10 секунд. Без этой проверки
+ * протухший refresh дал бы бесконечный круг `proxy` ⇄ обновление.
+ */
+function refreshOrLogin(request: NextRequest): NextResponse {
+  const hasRefresh = Boolean(request.cookies.get(REFRESH_COOKIE_NAME)?.value);
+  const alreadyTried = Boolean(request.cookies.get(REFRESH_ATTEMPT_COOKIE)?.value);
+  if (!hasRefresh || alreadyTried) return redirectToLogin(request);
+
+  const url = new URL('/api/auth/session-refresh', request.url);
+  url.searchParams.set('next', request.nextUrl.pathname + request.nextUrl.search);
   return NextResponse.redirect(url);
 }
 
@@ -81,10 +112,10 @@ export default async function proxy(request: NextRequest): Promise<NextResponse>
   if (!isProtected) return NextResponse.next();
 
   const picked = pickToken(request);
-  if (!picked) return redirectToLogin(request);
+  if (!picked) return refreshOrLogin(request);
 
   const payload = await verifyAccessToken(picked.token);
-  if (!payload) return redirectToLogin(request);
+  if (!payload) return refreshOrLogin(request);
 
   if (isAdmin && payload.role !== 'SUPERADMIN') {
     return NextResponse.redirect(new URL('/dashboard', request.url));
