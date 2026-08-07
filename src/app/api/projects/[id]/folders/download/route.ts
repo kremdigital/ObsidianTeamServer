@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db/client';
 import { errors } from '@/lib/http/errors';
 import { authenticateRequest } from '@/lib/auth/authenticate';
 import { canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
-import { readProjectFileStream } from '@/lib/files/storage';
+import { getProjectFileStat, readProjectFileStream } from '@/lib/files/storage';
 import { InvalidPathError, normalizeVaultPath } from '@/lib/files/paths';
 import { child } from '@/lib/logger';
 
@@ -51,7 +51,29 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   // throughput over ratio while still shrinking markdown.
   const archive = new ZipArchive({ zlib: { level: 1 } });
   archive.on('error', (err: Error) => log.error({ err }, 'folder zip stream error'));
-  for (const f of files) {
+
+  // Файлы, которых нет на диске, пропускаем, а не отдаём в архив.
+  //
+  // `createReadStream` на отсутствующем файле не бросает синхронно — ошибка
+  // прилетает событием уже в середине потока, обрывая **весь** архив. Один
+  // потерянный файл делал нескачиваемой всю папку. Расхождение БД и диска —
+  // аномалия, поэтому каждый пропуск пишется в лог как `error`.
+  const missing: string[] = [];
+  await Promise.all(
+    files.map(async (f) => {
+      if (!(await getProjectFileStat(id, f.path))) missing.push(f.path);
+    }),
+  );
+  if (missing.length > 0) {
+    log.error({ missing, count: missing.length }, 'файлы есть в БД, но отсутствуют на диске');
+  }
+
+  const present = files.filter((f) => !missing.includes(f.path));
+  if (present.length === 0) {
+    return errors.notFound('Файлы папки отсутствуют в хранилище', 'files_missing_on_disk');
+  }
+
+  for (const f of present) {
     const name = parent ? f.path.slice(parent.length + 1) : f.path;
     archive.append(readProjectFileStream(id, f.path), { name });
   }

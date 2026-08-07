@@ -30,7 +30,10 @@ export const errors = {
     apiError('validation_error', 'Validation failed', 400, fields),
   unauthorized: (message = 'Authentication required') => apiError('unauthorized', message, 401),
   forbidden: (message = 'Forbidden') => apiError('forbidden', message, 403),
-  notFound: (message = 'Not found') => apiError('not_found', message, 404),
+  // `code` необязателен: по умолчанию общий `not_found`. Отдельный код нужен,
+  // когда клиенту важно отличить «такой записи нет» от других причин — например
+  // `file_missing_on_disk`, где запись есть, а байтов в хранилище нет.
+  notFound: (message = 'Not found', code = 'not_found') => apiError(code, message, 404),
   conflict: (code: string, message: string) => apiError(code, message, 409),
   invalid: (code: string, message: string) => apiError(code, message, 400),
   internal: (message = 'Internal server error') => apiError('internal_error', message, 500),

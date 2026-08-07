@@ -7,8 +7,9 @@ import { prisma } from '@/lib/db/client';
 import { errors, parseJsonBody } from '@/lib/http/errors';
 import { authenticateRequest, getMaxFileSize } from '@/lib/auth/authenticate';
 import { canEditFiles, canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
-import { readProjectFileStream } from '@/lib/files/storage';
+import { getProjectFileStat, readProjectFileStream } from '@/lib/files/storage';
 import { sha256OfBuffer } from '@/lib/files/hash';
+import { child } from '@/lib/logger';
 import { recordFileVersion } from '@/lib/files/versioning';
 import { corsPreflight, withCors } from '@/lib/http/cors';
 
@@ -35,14 +36,46 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
   });
   if (!file) return withCors(errors.notFound('Файл не найден'), request);
 
+  // Наличие на диске проверяем ДО формирования ответа.
+  //
+  // `createReadStream` на отсутствующем файле не бросает синхронно — ошибка
+  // приходит событием, когда ответ 200 уже отдан. Соединение обрывалось, и
+  // пользователь получал `HTTP 502` от Caddy вместо внятного кода, а в списке
+  // файлов заметка при этом выглядела живой.
+  //
+  // Расхождение БД и диска — аномалия (ручные правки, сбой ФС, оборванная
+  // операция), поэтому пишем `error`, а не просто отдаём 404.
+  const onDisk = await getProjectFileStat(id, file.path);
+  if (!onDisk) {
+    child({ route: 'files.get' }).error(
+      { projectId: id, fileId, path: file.path },
+      'файл есть в БД, но отсутствует на диске',
+    );
+    return withCors(
+      errors.notFound('Файл отсутствует в хранилище', 'file_missing_on_disk'),
+      request,
+    );
+  }
+
   const stream = readProjectFileStream(id, file.path);
+  // Файл может исчезнуть между проверкой и чтением. Без обработчика такая
+  // ошибка роняет процесс: поток уже отдан как тело ответа.
+  stream.on('error', (err) => {
+    child({ route: 'files.get' }).error(
+      { err, projectId: id, fileId, path: file.path },
+      'чтение файла оборвалось',
+    );
+  });
   const webStream = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
   return withCors(
     new Response(webStream, {
       status: 200,
       headers: {
         'content-type': file.mimeType ?? 'application/octet-stream',
-        'content-length': file.size.toString(),
+        // Длина берётся с диска, а не из БД: при расхождении заголовок обязан
+        // соответствовать реально отправленным байтам, иначе клиент повиснет
+        // в ожидании недостающих данных.
+        'content-length': onDisk.size.toString(),
       },
     }),
     request,
