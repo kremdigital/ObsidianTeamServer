@@ -383,14 +383,24 @@ configure_caddy() {
   install -d /etc/caddy
   install -d -o caddy -g caddy /var/log/caddy 2>/dev/null || true
 
+  # MIRROR_DOMAINS — необязательный список доменов-зеркал через запятую
+  # (например `teamvault.example.com`). Каждый обслуживается ТЕМ ЖЕ site-блоком;
+  # Caddy выпустит на каждый свой сертификат, поэтому все они должны заранее
+  # резолвиться на этот сервер. В шаблон уходит уже с ведущей запятой.
+  local extra_domains=''
+  if [[ -n "${MIRROR_DOMAINS:-}" ]]; then
+    extra_domains=", ${MIRROR_DOMAINS//,/, }"
+  fi
+
   if [[ -f "${INSTALL_DIR}/config/Caddyfile.example" ]]; then
-    DOMAIN="${DOMAIN}" PORT_WEB="${PORT_WEB}" PORT_SOCKET="${PORT_SOCKET}" \
-      envsubst '${DOMAIN} ${PORT_WEB} ${PORT_SOCKET}' \
+    DOMAIN="${DOMAIN}" EXTRA_DOMAINS="${extra_domains}" \
+      PORT_WEB="${PORT_WEB}" PORT_SOCKET="${PORT_SOCKET}" \
+      envsubst '${DOMAIN} ${EXTRA_DOMAINS} ${PORT_WEB} ${PORT_SOCKET}' \
       < "${INSTALL_DIR}/config/Caddyfile.example" \
       > /etc/caddy/Caddyfile
   else
     cat > /etc/caddy/Caddyfile <<EOF
-${DOMAIN} {
+${DOMAIN}${extra_domains} {
     encode gzip zstd
     handle /socket.io/* { reverse_proxy localhost:3001 }
     handle { reverse_proxy localhost:3000 }

@@ -1,14 +1,20 @@
 # Caddy configuration for Obsidian Team.
 #
-# This file is templated by `scripts/install.sh`: ${DOMAIN}, ${PORT_WEB} and
-# ${PORT_SOCKET} are substituted via `envsubst` before the file is copied to
-# /etc/caddy/Caddyfile.
+# This file is templated by `scripts/install.sh`: ${DOMAIN}, ${EXTRA_DOMAINS},
+# ${PORT_WEB} and ${PORT_SOCKET} are substituted via `envsubst` before the file
+# is copied to /etc/caddy/Caddyfile.
+#
+# ${EXTRA_DOMAINS} — mirror hostnames served by the SAME site block, each
+# preceded by a comma (e.g. `, teamvault.example.com`). Empty by default. Caddy
+# issues a certificate per hostname, so every one of them must already resolve
+# to this server. Sessions are NOT shared across hostnames: cookies are
+# host-scoped, so a user signs in on each domain separately.
 #
 # The `{remote_host}` placeholders below are *Caddy* placeholders (resolved at
 # request time) — they intentionally pass through envsubst unchanged because
 # envsubst only expands `$VAR` / `${VAR}`.
 
-${DOMAIN} {
+${DOMAIN}${EXTRA_DOMAINS} {
     encode gzip zstd
 
     # Socket.IO traffic (websocket + long-polling) — proxy raw to the socket process.

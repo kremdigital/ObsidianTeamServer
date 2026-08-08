@@ -16,12 +16,30 @@ export interface CreateSocketOptions {
   corsOrigin?: string | string[];
 }
 
+/**
+ * Origin'ы, которым разрешён socket-хендшейк.
+ *
+ * Кроме основного `PUBLIC_URL` учитывается `EXTRA_ORIGINS` — список через
+ * запятую для доменов-зеркал. Без этого вход на зеркало ломается ровно
+ * наполовину: страницы отдаются (их проксирует Caddy), а веб-редактор молча не
+ * подключается, потому что рукопожатие идёт с `credentials: true` и браузер
+ * режет его по CORS.
+ */
+export function allowedOrigins(): string | string[] {
+  const primary = process.env.PUBLIC_URL ?? 'http://localhost:3000';
+  const extra = (process.env.EXTRA_ORIGINS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return extra.length > 0 ? [primary, ...extra] : primary;
+}
+
 export function createIoServer(options: CreateSocketOptions = {}): {
   io: IOServer;
   httpServer: HttpServer;
 } {
   const httpServer = options.httpServer ?? createServer();
-  const corsOrigin = options.corsOrigin ?? process.env.PUBLIC_URL ?? 'http://localhost:3000';
+  const corsOrigin = options.corsOrigin ?? allowedOrigins();
 
   const io = new IOServer(httpServer, {
     cors: {
