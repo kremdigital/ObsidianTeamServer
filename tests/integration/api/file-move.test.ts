@@ -156,6 +156,41 @@ describe('PATCH /api/projects/[id]/files/[fileId] — перемещение', (
     await expect(readFile(diskPath(projectId, 'сам.md'), 'utf8')).resolves.toBe('без изменений');
   });
 
+  it('файл на месте будущего каталога отдаёт 409, а не пустой 500', async () => {
+    // Папки виртуальные: в БД «раздел» (файл без расширения) и «раздел/б.md»
+    // уживаются, а на диске «раздел» не может быть сразу файлом и каталогом —
+    // mkdir получит EEXIST. Раньше исключение уходило наружу пустым 500.
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    const fileId = await seedFile(projectId, user.id, 'исходный.md', 'текст');
+    await seedFile(projectId, user.id, 'раздел', 'я файл, а не папка');
+
+    const res = await call(plain, projectId, fileId, 'раздел/б.md');
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('path_blocked');
+    // Виновник назван — иначе отказ выглядит абсурдом: путь-то свободен.
+    expect(body.error.message).toContain('раздел');
+
+    // Ни диск, ни БД не тронуты.
+    const row = await testPrisma.vaultFile.findUnique({ where: { id: fileId } });
+    expect(row?.path).toBe('исходный.md');
+    await expect(readFile(diskPath(projectId, 'исходный.md'), 'utf8')).resolves.toBe('текст');
+    await expect(readFile(diskPath(projectId, 'раздел'), 'utf8')).resolves.toBe(
+      'я файл, а не папка',
+    );
+  });
+
+  it('перемещение файла на путь существующей папки отдаёт 409', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    const fileId = await seedFile(projectId, user.id, 'одинокий.md', 'текст');
+    await seedFile(projectId, user.id, 'папка/внутри.md', 'сосед');
+
+    const res = await call(plain, projectId, fileId, 'папка');
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('path_blocked');
+    await expect(readFile(diskPath(projectId, 'папка/внутри.md'), 'utf8')).resolves.toBe('сосед');
+  });
+
   it('некорректный путь отклоняется до любых изменений', async () => {
     const { projectId, user, plain } = await seedOwnerWithKey();
     const fileId = await seedFile(projectId, user.id, 'ok.md', 'цел');

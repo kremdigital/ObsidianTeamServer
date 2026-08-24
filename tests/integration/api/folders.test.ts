@@ -59,6 +59,18 @@ async function seedOwnerWithKey() {
   return { user, projectId: project.id, plain: gen.plain };
 }
 
+async function seedMemberWithKey(projectId: string, addedById: string, role: 'VIEWER' | 'EDITOR') {
+  const user = await testPrisma.user.create({
+    data: { email: `v-${Date.now()}-${Math.random()}@x.test`, passwordHash: 'h', name: 'V' },
+  });
+  const gen = await generateApiKey();
+  await testPrisma.apiKey.create({
+    data: { userId: user.id, name: 'cli', keyHash: gen.hash, keyPrefix: gen.prefix },
+  });
+  await testPrisma.projectMember.create({ data: { projectId, userId: user.id, role, addedById } });
+  return { user, plain: gen.plain };
+}
+
 let clock = 0;
 async function seedFile(projectId: string, userId: string, path: string, content: string) {
   clock += 1;
@@ -198,5 +210,82 @@ describe('DELETE /folders — удаление', () => {
   it('несуществующая папка — 404', async () => {
     const { projectId, plain } = await seedOwnerWithKey();
     expect((await remove(plain, projectId, 'нет-такой')).status).toBe(404);
+  });
+});
+
+describe('PATCH /folders — файл на месте будущего каталога', () => {
+  it('отдаёт 409 path_blocked и НЕ переносит ни одного файла', async () => {
+    // Тот самый разрыв папки пополам: проверка занятости смотрела только на
+    // полные целевые пути, а файл с именем каталога назначения проходил её
+    // насквозь и ломал mkdir на середине цикла — половина файлов уже переехала,
+    // клиент получал пустой 500.
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'из/х/1.md', 'первый');
+    await seedFile(projectId, user.id, 'из/у/2.md', 'второй');
+    await seedFile(projectId, user.id, 'в/у', 'я файл с именем будущей папки');
+
+    const res = await rename(plain, projectId, 'из', 'в');
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('path_blocked');
+    expect(body.error.message).toContain('в/у');
+
+    // Ключевое: ни одного сдвинутого файла.
+    expect(await livePaths(projectId)).toEqual(['в/у', 'из/у/2.md', 'из/х/1.md']);
+    // И журнал чист — клиентам не разослано несуществующего переноса.
+    expect(await testPrisma.operationLog.count({ where: { projectId, opType: 'MOVE' } })).toBe(0);
+  });
+
+  it('файлы самой переносимой папки помехой не считаются', async () => {
+    // Папка «а» содержит файл «а/б» и «а/б-текст.md». При переносе «а» → «б»
+    // сам «а/б» уезжает и освобождает путь — отказывать здесь не за что.
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'а/вложенная/1.md', 'первый');
+    await seedFile(projectId, user.id, 'а/2.md', 'второй');
+
+    const res = await rename(plain, projectId, 'а', 'б');
+    expect(res.status).toBe(200);
+    expect(await livePaths(projectId)).toEqual(['б/2.md', 'б/вложенная/1.md']);
+  });
+});
+
+describe('/folders — права', () => {
+  it('VIEWER не может ни переименовать, ни удалить папку', async () => {
+    const { projectId, user } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'папка/файл.md', 'текст');
+    const viewer = await seedMemberWithKey(projectId, user.id, 'VIEWER');
+
+    expect((await rename(viewer.plain, projectId, 'папка', 'новая')).status).toBe(403);
+    expect((await remove(viewer.plain, projectId, 'папка')).status).toBe(403);
+    // Отказ должен быть настоящим, а не «ответили 403 и всё-таки сделали».
+    expect(await livePaths(projectId)).toEqual(['папка/файл.md']);
+  });
+
+  it('EDITOR может', async () => {
+    const { projectId, user } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'папка/файл.md', 'текст');
+    const editor = await seedMemberWithKey(projectId, user.id, 'EDITOR');
+
+    expect((await rename(editor.plain, projectId, 'папка', 'новая')).status).toBe(200);
+    expect(await livePaths(projectId)).toEqual(['новая/файл.md']);
+  });
+
+  it('ключ постороннего пользователя не даёт трогать папки', async () => {
+    // 403, а не 404 — так же, как на остальных роутах проекта (GET /files и
+    // прочие). Отдельная семантика только у папок расходилась бы с остальным
+    // API; то, что 403 подтверждает постороннему существование проекта, —
+    // свойство общей конвенции, а не этого роута.
+    //
+    // Случай «совсем без ключа» здесь не проверить: authenticateRequest
+    // проваливается в сессионную ветку, а та зовёт next/headers, недоступный
+    // вне request-scope. Этот путь закрыт проверкой на проде (PATCH/DELETE
+    // без ключа → 401).
+    const { projectId, user } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'папка/файл.md', 'текст');
+    const outsider = await seedOwnerWithKey();
+
+    expect((await rename(outsider.plain, projectId, 'папка', 'новая')).status).toBe(403);
+    expect((await remove(outsider.plain, projectId, 'папка')).status).toBe(403);
+    expect(await livePaths(projectId)).toEqual(['папка/файл.md']);
   });
 });

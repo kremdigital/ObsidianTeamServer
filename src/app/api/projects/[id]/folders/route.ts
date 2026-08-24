@@ -5,8 +5,9 @@ import { errors, parseJsonBody } from '@/lib/http/errors';
 import { authenticateRequest } from '@/lib/auth/authenticate';
 import { canEditFiles, loadProjectAccess } from '@/lib/auth/permissions';
 import { InvalidPathError, normalizeVaultPath } from '@/lib/files/paths';
-import { moveVaultFile } from '@/lib/files/move-file';
+import { findBatchPathBlocker, moveVaultFile } from '@/lib/files/move-file';
 import { applyRestOperation } from '@/lib/sync/rest-write';
+import { child } from '@/lib/logger';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -86,14 +87,54 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
     );
   }
 
+  // Занятость самого пути — не единственное препятствие. Папки виртуальные, и
+  // файл с именем будущего каталога (скажем, файл `в` при назначении `в/б.md`)
+  // проверку выше проходит, а на диске ломает `mkdir`. Раньше это вылезало
+  // исключением из середины цикла: половина папки уже переехала, клиент получал
+  // пустой 500. Проверяем весь набор назначений одним запросом до первого
+  // переноса.
+  const blocked = await findBatchPathBlocker({
+    projectId: id,
+    targets: targets.map((t) => t.to),
+    ignoreFileIds: files.map((f) => f.id),
+  });
+  if (blocked) {
+    return errors.conflict(
+      'path_blocked',
+      `Путь «${blocked.target}» занят файлом «${blocked.blockedBy}»`,
+    );
+  }
+
   const failed: string[] = [];
   for (const t of targets) {
-    const res = await moveVaultFile({
-      projectId: id,
-      userId: user.id,
-      fileId: t.id,
-      toPath: t.to,
-    });
+    let res;
+    try {
+      res = await moveVaultFile({
+        projectId: id,
+        userId: user.id,
+        fileId: t.id,
+        toPath: t.to,
+      });
+    } catch (err) {
+      // Проверки выше делают это маловероятным, но не невозможным (гонка,
+      // отказ диска). Останавливаемся и честно сообщаем, сколько успело
+      // переехать: молчаливый 500 оставлял пользователя гадать о состоянии
+      // папки.
+      child({ route: 'folders.rename' }).error(
+        { err, projectId: id, from, to, path: t.path },
+        'перенос файла папки сорвался',
+      );
+      const moved = targets.indexOf(t);
+      return NextResponse.json(
+        {
+          error: {
+            code: 'partial_move',
+            message: `Папка перенесена частично: ${moved} из ${targets.length}. Остановились на «${t.path}».`,
+          },
+        },
+        { status: 500 },
+      );
+    }
     if (!res.ok) failed.push(t.path);
   }
 
@@ -118,13 +159,33 @@ export async function DELETE(request: Request, context: RouteContext): Promise<N
 
   // Через общий механизм: мягкое удаление, снятие файла с диска, журнал и
   // рассылка клиентам — как у одиночного удаления.
+  let deleted = 0;
   for (const f of files) {
-    await applyRestOperation({
-      projectId: id,
-      userId: user.id,
-      op: { opType: 'DELETE', filePath: f.path, payload: { fileId: f.id } },
-    });
+    try {
+      await applyRestOperation({
+        projectId: id,
+        userId: user.id,
+        op: { opType: 'DELETE', filePath: f.path, payload: { fileId: f.id } },
+      });
+    } catch (err) {
+      // Как и у переименования: сорвавшись на середине, отвечаем разборчиво, а
+      // не пустым 500 — пользователю важно знать, что папка удалена частично.
+      child({ route: 'folders.delete' }).error(
+        { err, projectId: id, folder, path: f.path },
+        'удаление файла папки сорвалось',
+      );
+      return NextResponse.json(
+        {
+          error: {
+            code: 'partial_delete',
+            message: `Папка удалена частично: ${deleted} из ${files.length}. Остановились на «${f.path}».`,
+          },
+        },
+        { status: 500 },
+      );
+    }
+    deleted += 1;
   }
 
-  return NextResponse.json({ path: folder, deleted: files.length });
+  return NextResponse.json({ path: folder, deleted });
 }
