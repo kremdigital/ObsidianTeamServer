@@ -7,6 +7,7 @@ import { authenticateRequest, getMaxFileSize } from '@/lib/auth/authenticate';
 import { canEditFiles, canViewProject, loadProjectAccess } from '@/lib/auth/permissions';
 import { InvalidPathError, normalizeVaultPath } from '@/lib/files/paths';
 import { sha256OfBuffer } from '@/lib/files/hash';
+import { PathIsDirectoryError } from '@/lib/files/storage';
 import { recordFileVersion } from '@/lib/files/versioning';
 
 export async function GET(
@@ -128,6 +129,16 @@ export async function POST(
     return errors.conflict('path_exists', 'Файл с таким путём уже существует');
   }
 
+  // Занятость самого пути — не единственная помеха. Папки в вальте виртуальны,
+  // и на диске файл с именем существующего каталога не создать: `rename` в
+  // атомарной записи получал `EISDIR`, а наружу уходил ПУСТОЙ 500 без кода
+  // ошибки. Перенос такую коллизию давно различает — создание не различало.
+  const { describeBlocker, findPathBlocker } = await import('@/lib/files/move-file');
+  const blocker = await findPathBlocker(id, normalizedPath);
+  if (blocker) {
+    return errors.conflict('path_blocked', describeBlocker(blocker));
+  }
+
   // Через общий механизм: журнал операций, засев Yjs для текста, оживление
   // тумбстоуна и рассылка подключённым клиентам. Раньше здесь была прямая
   // запись в БД — из-за неё правки через REST не доходили до плагина.
@@ -153,6 +164,12 @@ export async function POST(
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       return errors.conflict('path_exists', 'Файл с таким путём уже существует');
+    }
+    // Каталог мог возникнуть после проверки — либо это скелет, оставшийся от
+    // старых операций и не убранный `clearEmptyDirectoryAt` из-за содержимого
+    // вне БД. Отвечаем внятно, а не пустым 500.
+    if (err instanceof PathIsDirectoryError) {
+      return errors.conflict('path_blocked', err.message);
     }
     throw err;
   }

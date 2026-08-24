@@ -6,7 +6,7 @@
  * это на клиенте означало бы сотни запросов на папке вроде `раскадровки/серия-1`
  * и частичный результат при первом же сбое.
  */
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -14,6 +14,7 @@ import {
   PATCH as renameFolder,
   DELETE as deleteFolder,
 } from '@/app/api/projects/[id]/folders/route';
+import { POST as createFile } from '@/app/api/projects/[id]/files/route';
 import { applyOperation } from '@/lib/sync/operation-log';
 import { generateApiKey } from '@/lib/auth/api-key';
 import { API_KEY_HEADER } from '@/lib/auth/api-key-middleware';
@@ -287,5 +288,62 @@ describe('/folders — права', () => {
     expect((await rename(outsider.plain, projectId, 'папка', 'новая')).status).toBe(403);
     expect((await remove(outsider.plain, projectId, 'папка')).status).toBe(403);
     expect(await livePaths(projectId)).toEqual(['папка/файл.md']);
+  });
+});
+
+describe('POST /files — путь занят папкой', () => {
+  const create = (plain: string, projectId: string, path: string, body: string) => {
+    const form = new FormData();
+    form.append('path', path);
+    form.append('file', new Blob([body], { type: 'text/markdown' }), 'x.md');
+    return createFile(
+      new Request('http://localhost/api/projects/x/files', {
+        method: 'POST',
+        headers: { [API_KEY_HEADER]: plain },
+        body: form,
+      }),
+      { params: Promise.resolve({ id: projectId }) },
+    );
+  };
+
+  it('создание файла с именем существующей папки — 409 path_blocked, а не пустой 500', async () => {
+    // На проде это было ПУСТОЕ 500 с EISDIR в логе: перенос такую коллизию
+    // различал, создание — нет.
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'раздел/глава.md', 'содержимое главы');
+
+    const res = await create(plain, projectId, 'раздел', 'подмена');
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('path_blocked');
+    expect(body.error.message).toContain('раздел/глава.md');
+
+    // Существующий файл не пострадал, лишней записи не появилось.
+    expect(await livePaths(projectId)).toEqual(['раздел/глава.md']);
+  });
+
+  it('файл на месте будущего каталога тоже даёт 409 при создании', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'раздел', 'я файл, а не папка');
+
+    const res = await create(plain, projectId, 'раздел/внутри.md', 'текст');
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('path_blocked');
+    expect(await livePaths(projectId)).toEqual(['раздел']);
+  });
+
+  it('пустой каталог-скелет создание не блокирует', async () => {
+    // Скелет остаётся, если файлы удалили старой версией сервера. Он ничего не
+    // значит и должен сниматься по требованию, а не отдавать 500.
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    const fileId = await seedFile(projectId, user.id, 'скелет/внутри.md', 'текст');
+    // Воспроизводим состояние «до фикса»: строки нет, файла нет, а каталог на
+    // диске остался. Именно так выглядят 139 скелетов, накопившихся на проде.
+    await testPrisma.vaultFile.update({ where: { id: fileId }, data: { deletedAt: new Date() } });
+    await unlink(join(getProjectRoot(projectId), 'скелет/внутри.md'));
+
+    const res = await create(plain, projectId, 'скелет', 'теперь это файл');
+    expect(res.status).toBe(201);
+    expect(await livePaths(projectId)).toEqual(['скелет']);
   });
 });

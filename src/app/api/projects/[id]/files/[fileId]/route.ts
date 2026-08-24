@@ -185,12 +185,9 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
       case 'not_found':
         return errors.notFound('Файл не найден');
       case 'path_blocked':
-        // Не «путь занят»: занят не сам путь, а один из каталогов на нём —
-        // сообщение обязано называть виновника, иначе отказ выглядит абсурдом.
-        return errors.conflict(
-          'path_blocked',
-          `Путь занят файлом «${result.blockedBy}» — на нём не создать папку`,
-        );
+        // Не «путь занят»: мешает либо файл на месте каталога, либо уже
+        // существующая папка. Формулировку готовит `describeBlocker`.
+        return errors.conflict('path_blocked', result.blockedBy);
       default:
         return errors.conflict('path_exists', 'Файл с таким путём уже существует');
     }

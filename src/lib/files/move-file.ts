@@ -1,13 +1,13 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db/client';
-import { moveProjectFile } from '@/lib/files/storage';
+import { moveProjectFile, PathIsDirectoryError } from '@/lib/files/storage';
 import { recordRestMove } from '@/lib/sync/rest-write';
 
 export type MoveOutcome =
   | { ok: true; fileId: string; path: string }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'path_exists' }
-  /** Путь нельзя создать на диске: мешает другой живой файл. */
+  /** Путь нельзя создать на диске. `blockedBy` — готовое объяснение для клиента. */
   | { ok: false; reason: 'path_blocked'; blockedBy: string };
 
 /** Пути-предки: для `а/б/в.md` — `а` и `а/б`. Для файла в корне — пусто. */
@@ -38,11 +38,28 @@ export function ancestorPaths(path: string): string[] {
  * `ignoreFileIds` — файлы, которые сами участвуют в этом же переносе: они
  * освободят свои пути и помехой не являются.
  */
+export interface PathBlocker {
+  /** Живой файл, из-за которого путь недоступен. */
+  path: string;
+  /**
+   * `file` — этот файл стоит на месте нужного каталога;
+   * `folder` — он лежит ВНУТРИ пути, то есть путь уже занят папкой.
+   */
+  kind: 'file' | 'folder';
+}
+
+/** Человеческая формулировка отказа: без имени виновника он выглядит абсурдом. */
+export function describeBlocker(blocker: PathBlocker): string {
+  return blocker.kind === 'file'
+    ? `Путь занят файлом «${blocker.path}» — на нём не создать папку`
+    : `На этом пути папка: в ней лежит «${blocker.path}»`;
+}
+
 export async function findPathBlocker(
   projectId: string,
   toPath: string,
   ignoreFileIds: string[] = [],
-): Promise<string | null> {
+): Promise<PathBlocker | null> {
   const exclude = ignoreFileIds.length > 0 ? { id: { notIn: ignoreFileIds } } : {};
 
   const ancestors = ancestorPaths(toPath);
@@ -51,14 +68,14 @@ export async function findPathBlocker(
       where: { projectId, deletedAt: null, path: { in: ancestors }, ...exclude },
       select: { path: true },
     });
-    if (inTheWay) return inTheWay.path;
+    if (inTheWay) return { path: inTheWay.path, kind: 'file' };
   }
 
   const underTarget = await prisma.vaultFile.findFirst({
     where: { projectId, deletedAt: null, path: { startsWith: `${toPath}/` }, ...exclude },
     select: { path: true },
   });
-  return underTarget?.path ?? null;
+  return underTarget ? { path: underTarget.path, kind: 'folder' } : null;
 }
 
 /**
@@ -100,8 +117,9 @@ export async function findBatchPathBlocker(opts: {
   return null;
 }
 
-/** Ошибки ФС, означающие «на этом пути уже что-то есть другого рода». */
+/** «На этом пути уже что-то есть другого рода» — типизированно или кодом ФС. */
 function isPathCollisionError(err: unknown): boolean {
+  if (err instanceof PathIsDirectoryError) return true;
   const code = (err as NodeJS.ErrnoException | null)?.code;
   return code === 'EEXIST' || code === 'EISDIR' || code === 'ENOTDIR' || code === 'ENOTEMPTY';
 }
@@ -144,7 +162,7 @@ export async function moveVaultFile(opts: {
   }
 
   const blocker = await findPathBlocker(projectId, toPath, [fileId]);
-  if (blocker) return { ok: false, reason: 'path_blocked', blockedBy: blocker };
+  if (blocker) return { ok: false, reason: 'path_blocked', blockedBy: describeBlocker(blocker) };
 
   // Мёртвую строку уводим на служебный путь, а не удаляем: так сохраняются её
   // версии и история, а `purge-tombstones` уберёт её штатно.
@@ -174,7 +192,7 @@ export async function moveVaultFile(opts: {
     // прежних операций, гонка, правка хранилища руками. Транзакция откатилась,
     // БД цела — отвечаем отказом, а не пустым 500 с исключением наружу.
     if (isPathCollisionError(err)) {
-      return { ok: false, reason: 'path_blocked', blockedBy: toPath };
+      return { ok: false, reason: 'path_blocked', blockedBy: `Путь «${toPath}» занят папкой` };
     }
     throw err;
   }

@@ -28,6 +28,69 @@ export interface ListedFile {
 }
 
 /**
+ * На пути файла стоит НЕПУСТОЙ каталог: файл и папка с одним именем на диске
+ * не уживаются. Отдельный тип, чтобы вызывающий отдал внятный 409, а не ронял
+ * запрос пустым 500 с `EISDIR` в логе.
+ */
+export class PathIsDirectoryError extends Error {
+  constructor(public readonly vaultPath: string) {
+    super(`Путь «${vaultPath}» занят папкой`);
+    this.name = 'PathIsDirectoryError';
+  }
+}
+
+/**
+ * Убрать каталог, стоящий ровно на месте будущего файла.
+ *
+ * Пустой каталог — это мусор: папки в вальте виртуальны, каталог без файлов не
+ * значит ничего. Такие скелеты копились годами (на проде их набралось 139 в
+ * одном вальте) и делали путь незаписываемым — `rename` во время атомарной
+ * записи получал `EISDIR`, и наружу уходил пустой 500. Снимаем по требованию:
+ * это чинит и уже накопившееся, без отдельной миграции.
+ *
+ * Непустой каталог — настоящая коллизия, и её решает не файловая система, а
+ * пользователь: сообщаем типизированной ошибкой.
+ */
+async function clearEmptyDirectoryAt(target: string, vaultPath: string): Promise<void> {
+  let info;
+  try {
+    info = await stat(target);
+  } catch {
+    return; // пути нет — записи ничего не мешает
+  }
+  if (!info.isDirectory()) return;
+  try {
+    await rmdir(target); // сработает только если каталог пуст
+  } catch {
+    throw new PathIsDirectoryError(vaultPath);
+  }
+}
+
+/**
+ * Одна повторная попытка, если каталог-родитель исчез между `mkdir` и записью.
+ *
+ * Такое окно есть по-настоящему: уборка пустых каталогов (`pruneEmptyParents`)
+ * работает параллельно и может снять каталог, который только что опустел, ровно
+ * между созданием и записью. Порчи данных это не даёт, но роняло бы запрос
+ * `ENOENT` на операции, которая просто просит повторить.
+ */
+async function withParentRetry<T>(target: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    await mkdir(dirname(target), { recursive: true });
+    return await run();
+  }
+}
+
+/** Ошибки ФС, означающие «на этом пути уже есть каталог». */
+function isDirectoryCollision(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code === 'EISDIR' || code === 'ENOTEMPTY' || code === 'EPERM';
+}
+
+/**
  * Atomically write a file (write to temp + rename). Creates parent dirs as needed.
  */
 export async function writeProjectFile(
@@ -36,16 +99,21 @@ export async function writeProjectFile(
   data: Buffer | Uint8Array,
 ): Promise<{ size: number; contentHash: string }> {
   const target = resolveProjectFile(projectId, vaultPath);
-  await mkdir(dirname(target), { recursive: true });
+  await clearEmptyDirectoryAt(target, vaultPath);
 
-  const tempPath = `${target}.${randomBytes(6).toString('hex')}.tmp`;
-  await writeFile(tempPath, data);
-  try {
-    await rename(tempPath, target);
-  } catch (err) {
-    await rm(tempPath, { force: true });
-    throw err;
-  }
+  await withParentRetry(target, async () => {
+    await mkdir(dirname(target), { recursive: true });
+    const tempPath = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+    await writeFile(tempPath, data);
+    try {
+      await rename(tempPath, target);
+    } catch (err) {
+      await rm(tempPath, { force: true });
+      // Каталог мог появиться на этом пути уже после проверки.
+      if (isDirectoryCollision(err)) throw new PathIsDirectoryError(vaultPath);
+      throw err;
+    }
+  });
 
   return { size: data.byteLength, contentHash: sha256OfBuffer(data) };
 }
@@ -87,8 +155,12 @@ export async function getProjectFileStat(
  * именем такого каталога потом не создать (`writeFile` на каталог даёт
  * `EISDIR`).
  *
- * Работа необязательная: помеха — не ошибка. Любой сбой глотаем, включая
- * `ENOTEMPTY` от параллельной записи в тот же каталог.
+ * Работа необязательная: помеха — не ошибка, любой сбой глотаем (типично —
+ * `ENOTEMPTY`, если в каталог уже что-то положили).
+ *
+ * Обратная сторона гонки закрыта у писателя, а не здесь: `withParentRetry`
+ * пересоздаёт каталог и повторяет запись, если уборка успела снять его между
+ * `mkdir` и `writeFile`.
  */
 async function pruneEmptyParents(projectId: string, vaultPath: string): Promise<void> {
   const root = getProjectRoot(projectId);
@@ -120,8 +192,17 @@ export async function moveProjectFile(
   const src = resolveProjectFile(projectId, fromPath);
   const dst = resolveProjectFile(projectId, toPath);
   if (src === dst) return;
-  await mkdir(dirname(dst), { recursive: true });
-  await rename(src, dst);
+  // Пустой каталог-скелет на месте назначения не помеха, непустой — коллизия.
+  await clearEmptyDirectoryAt(dst, toPath);
+  await withParentRetry(dst, async () => {
+    await mkdir(dirname(dst), { recursive: true });
+    try {
+      await rename(src, dst);
+    } catch (err) {
+      if (isDirectoryCollision(err)) throw new PathIsDirectoryError(toPath);
+      throw err;
+    }
+  });
   // Каталог, из которого файл ушёл, мог опустеть — снимаем его так же, как при
   // удалении. Строго ПОСЛЕ переноса: до него каталог ещё занят.
   await pruneEmptyParents(projectId, fromPath);
