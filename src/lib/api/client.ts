@@ -133,3 +133,37 @@ export async function apiPatch<T>(
   }
   return (await res.json()) as T;
 }
+
+export async function apiDelete<T>(url: string, init?: { signal?: AbortSignal }): Promise<T> {
+  const res = await request(url, {
+    method: 'DELETE',
+    ...(init?.signal ? { signal: init.signal } : {}),
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return (await res.json()) as T;
+}
+
+/**
+ * Загрузка файла (`multipart/form-data`).
+ *
+ * Отдельно от `apiPost`, потому что заголовок `content-type` для multipart
+ * задаёт сам браузер — вместе с `boundary`. Проставить его вручную значит
+ * отправить тело, которое сервер не разберёт.
+ */
+export async function apiUpload<T>(
+  url: string,
+  form: FormData,
+  init?: { signal?: AbortSignal },
+): Promise<T> {
+  const res = await request(url, {
+    method: 'POST',
+    body: form,
+    ...(init?.signal ? { signal: init.signal } : {}),
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return (await res.json()) as T;
+}

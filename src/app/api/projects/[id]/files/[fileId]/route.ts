@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
 import { Readable } from 'node:stream';
 import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { prisma } from '@/lib/db/client';
@@ -161,15 +160,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
   const parsed = await parseJsonBody(request, moveSchema);
   if (!parsed.ok) return parsed.response;
 
-  const file = await prisma.vaultFile.findFirst({
-    where: { id: fileId, projectId: id, deletedAt: null },
-    select: { path: true },
-  });
-  if (!file) return errors.notFound('Файл не найден');
-
-  const { moveProjectFile } = await import('@/lib/files/storage');
   const { InvalidPathError, normalizeVaultPath } = await import('@/lib/files/paths');
-
   let normalizedNew: string;
   try {
     normalizedNew = normalizeVaultPath(parsed.data.newPath);
@@ -180,81 +171,22 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
     throw err;
   }
 
-  if (file.path === normalizedNew) {
-    return NextResponse.json({ file: { id: fileId, path: normalizedNew } });
-  }
-
-  // Занятость целевого пути проверяем ДО того, как тронуть диск.
-  //
-  // `moveProjectFile` — это `rename(src, dst)`, а POSIX `rename` молча затирает
-  // назначение. Раньше перенос выполнялся первым, и при конфликте содержимое
-  // файла-назначения уничтожалось, а следом падало обновление БД (`P2002`,
-  // необработанный → HTTP 500): диск и БД расходились, обе заметки переставали
-  // читаться. Поэтому: сначала отказ, диск не трогаем.
-  //
-  // Конфликтом считается только ЖИВОЙ файл. Тумбстоун путь не держит: `POST
-  // /files` на такой путь оживляет запись, и `PATCH` обязан вести себя так же —
-  // иначе заметку нельзя переместить на место ранее удалённой.
-  const occupant = await prisma.vaultFile.findUnique({
-    where: { projectId_path: { projectId: id, path: normalizedNew } },
-    select: { id: true, deletedAt: true },
-  });
-  if (occupant && occupant.id !== fileId && occupant.deletedAt === null) {
-    return errors.conflict('path_exists', 'Файл с таким путём уже существует');
-  }
-
-  // Тумбстоун освобождает путь: `@@unique([projectId, path])` покрывает и
-  // удалённые строки, поэтому просто так занять путь нельзя. Уводим мёртвую
-  // строку на служебный путь (а не удаляем) — так сохраняются её версии и
-  // история, а `purge-tombstones` уберёт её штатно.
-  const tombstoneToFree = occupant && occupant.id !== fileId ? occupant.id : null;
-
-  // Диск двигаем внутри транзакции: сбой переноса откатывает и запись в БД,
-  // поэтому несогласованного состояния не остаётся ни при одном из исходов.
-  //
-  // Здесь применяется не `applyRestOperation`, а прямое обновление: сокетный
-  // `applyMove` при коллизии уводит файл в `<path>.conflict-<clientId>`, что
-  // для явного вызова API неверно (нужен отказ). Журнал и рассылка добавляются
-  // ниже отдельно — операция должна дойти до клиентов так же, как остальные.
-  let updated: { id: string; path: string };
-  try {
-    updated = await prisma.$transaction(async (tx) => {
-      if (tombstoneToFree) {
-        await tx.vaultFile.update({
-          where: { id: tombstoneToFree },
-          data: { path: `${normalizedNew}.tombstone-${tombstoneToFree}` },
-        });
-      }
-      const row = await tx.vaultFile.update({
-        where: { id: fileId },
-        data: { path: normalizedNew, lastModifiedById: user.id },
-        select: { id: true, path: true },
-      });
-      await moveProjectFile(id, file.path, normalizedNew);
-      return row;
-    });
-  } catch (err) {
-    // Страховка от гонки: между проверкой выше и обновлением путь мог занять
-    // параллельный запрос.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      return errors.conflict('path_exists', 'Файл с таким путём уже существует');
-    }
-    throw err;
-  }
-
-  // Журнал + рассылка. Диск и БД уже согласованы, поэтому ошибка здесь не
-  // должна отменять успешное перемещение — худшее следствие в том, что клиент
-  // узнает о нём при следующей полной сверке.
-  const { recordRestMove } = await import('@/lib/sync/rest-write');
-  await recordRestMove({
+  // Вся механика переноса — в общем модуле: её же использует переименование
+  // папки, а логика неочевидная (тумбстоуны, транзакция, порядок диск/БД).
+  const { moveVaultFile } = await import('@/lib/files/move-file');
+  const result = await moveVaultFile({
     projectId: id,
     userId: user.id,
     fileId,
-    fromPath: file.path,
     toPath: normalizedNew,
-  }).catch(() => undefined);
+  });
+  if (!result.ok) {
+    return result.reason === 'not_found'
+      ? errors.notFound('Файл не найден')
+      : errors.conflict('path_exists', 'Файл с таким путём уже существует');
+  }
 
-  return NextResponse.json({ file: updated });
+  return NextResponse.json({ file: { id: result.fileId, path: result.path } });
 }
 
 export async function DELETE(_request: Request, context: RouteContext): Promise<NextResponse> {

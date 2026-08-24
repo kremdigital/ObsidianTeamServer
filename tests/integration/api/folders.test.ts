@@ -1,0 +1,202 @@
+/**
+ * Операции над папкой.
+ *
+ * Папок как сущности не существует — есть только префикс в пути файла, поэтому
+ * действие над папкой разворачивается в действия над каждым её файлом. Делать
+ * это на клиенте означало бы сотни запросов на папке вроде `раскадровки/серия-1`
+ * и частичный результат при первом же сбое.
+ */
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  PATCH as renameFolder,
+  DELETE as deleteFolder,
+} from '@/app/api/projects/[id]/folders/route';
+import { applyOperation } from '@/lib/sync/operation-log';
+import { generateApiKey } from '@/lib/auth/api-key';
+import { API_KEY_HEADER } from '@/lib/auth/api-key-middleware';
+import { getProjectRoot } from '@/lib/files/paths';
+import { resetDatabase, testPrisma } from '../db';
+
+let storageRoot: string;
+let originalStoragePath: string | undefined;
+
+beforeAll(async () => {
+  storageRoot = await mkdtemp(join(tmpdir(), 'osync-folders-'));
+  originalStoragePath = process.env.STORAGE_PATH;
+  process.env.STORAGE_PATH = storageRoot;
+});
+
+afterAll(async () => {
+  if (originalStoragePath !== undefined) process.env.STORAGE_PATH = originalStoragePath;
+  else delete process.env.STORAGE_PATH;
+  await rm(storageRoot, { recursive: true, force: true });
+  await testPrisma.$disconnect();
+});
+
+beforeEach(async () => {
+  await resetDatabase();
+});
+
+async function seedOwnerWithKey() {
+  const user = await testPrisma.user.create({
+    data: { email: `f-${Date.now()}-${Math.random()}@x.test`, passwordHash: 'h', name: 'O' },
+  });
+  const gen = await generateApiKey();
+  await testPrisma.apiKey.create({
+    data: { userId: user.id, name: 'cli', keyHash: gen.hash, keyPrefix: gen.prefix },
+  });
+  const project = await testPrisma.project.create({
+    data: {
+      slug: `s-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: 'P',
+      ownerId: user.id,
+      members: { create: { userId: user.id, role: 'ADMIN', addedById: user.id } },
+    },
+  });
+  return { user, projectId: project.id, plain: gen.plain };
+}
+
+let clock = 0;
+async function seedFile(projectId: string, userId: string, path: string, content: string) {
+  clock += 1;
+  const res = await applyOperation(
+    { projectId, authorId: userId, clientId: 'A', vectorClock: { A: clock } },
+    {
+      opType: 'CREATE',
+      filePath: path,
+      payload: {
+        fileType: 'TEXT',
+        mimeType: 'text/markdown',
+        contentHash: `h${clock}`,
+        size: Buffer.byteLength(content),
+      },
+      data: Buffer.from(content),
+    },
+  );
+  if (res.outcome.kind !== 'created') throw new Error(`ожидали created для ${path}`);
+  return res.outcome.fileId;
+}
+
+const rename = (plain: string, projectId: string, path: string, newPath: string) =>
+  renameFolder(
+    new Request('http://localhost/api/projects/x/folders', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', [API_KEY_HEADER]: plain },
+      body: JSON.stringify({ path, newPath }),
+    }),
+    { params: Promise.resolve({ id: projectId }) },
+  );
+
+const remove = (plain: string, projectId: string, path: string) =>
+  deleteFolder(
+    new Request(`http://localhost/api/projects/x/folders?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+      headers: { [API_KEY_HEADER]: plain },
+    }),
+    { params: Promise.resolve({ id: projectId }) },
+  );
+
+const livePaths = (projectId: string) =>
+  testPrisma.vaultFile
+    .findMany({
+      where: { projectId, deletedAt: null },
+      select: { path: true },
+      orderBy: { path: 'asc' },
+    })
+    .then((r) => r.map((x) => x.path));
+
+describe('PATCH /folders — переименование', () => {
+  it('переносит все файлы, включая вложенные', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'папка/один.md', 'первый');
+    await seedFile(projectId, user.id, 'папка/вложенная/два.md', 'второй');
+    await seedFile(projectId, user.id, 'другая/три.md', 'чужой');
+
+    const res = await rename(plain, projectId, 'папка', 'новая');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { moved: number }).moved).toBe(2);
+
+    expect(await livePaths(projectId)).toEqual([
+      'другая/три.md',
+      'новая/вложенная/два.md',
+      'новая/один.md',
+    ]);
+    // Содержимое переносится вместе с файлом, а не теряется.
+    await expect(readFile(join(getProjectRoot(projectId), 'новая/один.md'), 'utf8')).resolves.toBe(
+      'первый',
+    );
+  });
+
+  it('пишет MOVE в журнал операций на каждый файл', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'п/а.md', 'a');
+    await seedFile(projectId, user.id, 'п/б.md', 'b');
+
+    await rename(plain, projectId, 'п', 'н');
+
+    const moves = await testPrisma.operationLog.count({ where: { projectId, opType: 'MOVE' } });
+    // Без записей в журнале клиенты не узнают о переносе — та же ловушка, что
+    // с REST-записями в августе.
+    expect(moves).toBe(2);
+  });
+
+  it('занятый путь отклоняется ДО первого переноса', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'из/а.md', 'a');
+    await seedFile(projectId, user.id, 'из/б.md', 'b');
+    await seedFile(projectId, user.id, 'в/б.md', 'занято');
+
+    const res = await rename(plain, projectId, 'из', 'в');
+    expect(res.status).toBe(409);
+    // Ключевое: ни один файл не сдвинулся — частично переименованная папка
+    // хуже честного отказа.
+    expect(await livePaths(projectId)).toEqual(['в/б.md', 'из/а.md', 'из/б.md']);
+  });
+
+  it('нельзя переместить папку внутрь себя', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'п/а.md', 'a');
+
+    const res = await rename(plain, projectId, 'п', 'п/внутрь');
+    expect(res.status).toBe(400);
+    expect(await livePaths(projectId)).toEqual(['п/а.md']);
+  });
+
+  it('несуществующая папка — 404', async () => {
+    const { projectId, plain } = await seedOwnerWithKey();
+    expect((await rename(plain, projectId, 'нет-такой', 'новая')).status).toBe(404);
+  });
+});
+
+describe('DELETE /folders — удаление', () => {
+  it('мягко удаляет все файлы папки и не трогает соседей', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'п/а.md', 'a');
+    await seedFile(projectId, user.id, 'п/вложенная/б.md', 'b');
+    await seedFile(projectId, user.id, 'сосед/в.md', 'c');
+
+    const res = await remove(plain, projectId, 'п');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { deleted: number }).deleted).toBe(2);
+
+    expect(await livePaths(projectId)).toEqual(['сосед/в.md']);
+  });
+
+  it('пишет DELETE в журнал на каждый файл', async () => {
+    const { projectId, user, plain } = await seedOwnerWithKey();
+    await seedFile(projectId, user.id, 'п/а.md', 'a');
+    await seedFile(projectId, user.id, 'п/б.md', 'b');
+
+    await remove(plain, projectId, 'п');
+
+    expect(await testPrisma.operationLog.count({ where: { projectId, opType: 'DELETE' } })).toBe(2);
+  });
+
+  it('несуществующая папка — 404', async () => {
+    const { projectId, plain } = await seedOwnerWithKey();
+    expect((await remove(plain, projectId, 'нет-такой')).status).toBe(404);
+  });
+});

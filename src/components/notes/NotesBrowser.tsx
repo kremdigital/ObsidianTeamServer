@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import {
   BookTextIcon,
@@ -21,12 +22,15 @@ import {
   EyeIcon,
   XIcon,
 } from 'lucide-react';
-import { ApiError, apiGetText } from '@/lib/api/client';
+import { ApiError, apiDelete, apiGetText, apiPatch, apiUpload } from '@/lib/api/client';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { PromptDialog } from '@/components/common/PromptDialog';
 import { slugifyHeading } from '@/lib/notes/slug';
 import { ancestorFolderPaths } from '@/lib/notes/tree';
+import { baseName, dirName, joinPath, keepExtension, noteFileName } from '@/lib/notes/paths';
 import type { NoteFile } from '@/lib/notes/types';
 import { AuthedImage } from './AuthedImage';
-import { FileTree } from './FileTree';
+import { FileTree, type FileTreeActions, type MenuTarget } from './FileTree';
 import { MarkdownView } from './MarkdownView';
 import { NoteEditor } from './NoteEditor';
 
@@ -55,6 +59,13 @@ function isImage(file: NoteFile): boolean {
   );
 }
 
+/** Открытый диалог контекстного меню. */
+type MenuDialog =
+  | { kind: 'create'; folder: string }
+  | { kind: 'rename'; target: MenuTarget }
+  | { kind: 'delete'; target: MenuTarget }
+  | null;
+
 /** One stop in the in-pane navigation history. */
 interface NavEntry {
   file: NoteFile;
@@ -77,8 +88,23 @@ export function NotesBrowser({
   userName,
 }: NotesBrowserProps): ReactElement {
   const t = useTranslations('notes');
+  const router = useRouter();
 
-  const markdownFiles = useMemo(() => files.filter(isMarkdown), [files]);
+  // Файлы, удалённые в этой сессии, скрываем сразу: `files` приходит пропом от
+  // серверного компонента и обновится только после `router.refresh()`. Без
+  // этого удалённая заметка ещё мгновение висит в дереве, а если она была
+  // открыта — тут же переоткрывается и отдаёт 404.
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const liveFiles = useMemo(
+    () => (removed.size === 0 ? files : files.filter((f) => !removed.has(f.id))),
+    [files, removed],
+  );
+
+  const [menuDialog, setMenuDialog] = useState<MenuDialog>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingOpen, setPendingOpen] = useState<string | null>(null);
+
+  const markdownFiles = useMemo(() => liveFiles.filter(isMarkdown), [liveFiles]);
   const [history, setHistory] = useState<NavEntry[]>([]);
   const [cursor, setCursor] = useState(-1);
   const [content, setContent] = useState<string>('');
@@ -147,7 +173,7 @@ export function NotesBrowser({
     if (selected || markdownFiles.length === 0) return;
     const params = new URLSearchParams(window.location.search);
     const wanted = params.get('note');
-    const fromUrl = wanted ? files.find((f) => f.path === wanted && isMarkdown(f)) : undefined;
+    const fromUrl = wanted ? liveFiles.find((f) => f.path === wanted && isMarkdown(f)) : undefined;
     const heading =
       fromUrl && window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : null;
     const preferred =
@@ -155,7 +181,7 @@ export function NotesBrowser({
       markdownFiles.find((f) => /(^|\/)(readme|welcome|index|home)\.md$/i.test(f.path)) ??
       markdownFiles[0]!;
     openFile(preferred, heading);
-  }, [markdownFiles, selected, openFile, files]);
+  }, [markdownFiles, selected, openFile, liveFiles]);
 
   // Fetch content whenever the selected file changes (markdown only).
   useEffect(() => {
@@ -201,9 +227,9 @@ export function NotesBrowser({
   // Filter the tree by the query (matches anywhere in the path).
   const visibleFiles = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return files;
-    return files.filter((f) => f.path.toLowerCase().includes(q));
-  }, [files, query]);
+    if (!q) return liveFiles;
+    return liveFiles.filter((f) => f.path.toLowerCase().includes(q));
+  }, [liveFiles, query]);
 
   // When searching, expand every folder so matches are visible.
   const effectiveExpanded = useMemo(() => {
@@ -266,6 +292,165 @@ export function NotesBrowser({
     [projectId],
   );
 
+  // Как только сервер прислал список без удалённых, локальный фильтр не нужен.
+  useEffect(() => {
+    if (removed.size === 0) return;
+    if (files.some((f) => removed.has(f.id))) return;
+    setRemoved(new Set());
+  }, [files, removed]);
+
+  // Созданную заметку открываем, когда она доедет со списком с сервера:
+  // `router.refresh()` асинхронный, и сразу после `POST` файла в пропе ещё нет.
+  useEffect(() => {
+    if (!pendingOpen) return;
+    const created = liveFiles.find((f) => f.path === pendingOpen);
+    if (!created) return;
+    setPendingOpen(null);
+    openFile(created, null);
+  }, [pendingOpen, liveFiles, openFile]);
+
+  const createNote = useCallback(
+    async (folder: string, rawName: string) => {
+      const name = noteFileName(rawName);
+      const path = joinPath(folder, name);
+      const form = new FormData();
+      form.append('path', path);
+      form.append('file', new Blob([''], { type: 'text/markdown' }), name);
+      await apiUpload(`/api/projects/${projectId}/files`, form);
+      setPendingOpen(path);
+      router.refresh();
+    },
+    [projectId, router],
+  );
+
+  const renameTarget = useCallback(
+    async (target: MenuTarget, rawName: string) => {
+      if (target.kind === 'file') {
+        const { id, path } = target.file;
+        const newPath = joinPath(dirName(path), keepExtension(baseName(path), rawName));
+        if (newPath === path) return;
+        await apiPatch(`/api/projects/${projectId}/files/${id}`, { newPath });
+        // История хранит копии файлов, а не ссылки на список: без правки
+        // строка пути над заметкой осталась бы старой до перезагрузки.
+        setHistory((prev) =>
+          prev.map((e) => (e.file.id === id ? { ...e, file: { ...e.file, path: newPath } } : e)),
+        );
+      } else {
+        const newPath = joinPath(dirName(target.path), rawName);
+        if (newPath === target.path) return;
+        await apiPatch(`/api/projects/${projectId}/folders`, { path: target.path, newPath });
+        const prefix = `${target.path}/`;
+        setHistory((prev) =>
+          prev.map((e) =>
+            e.file.path.startsWith(prefix)
+              ? {
+                  ...e,
+                  file: { ...e.file, path: `${newPath}/${e.file.path.slice(prefix.length)}` },
+                }
+              : e,
+          ),
+        );
+      }
+      router.refresh();
+    },
+    [projectId, router],
+  );
+
+  const deleteTarget = useCallback(
+    async (target: MenuTarget) => {
+      const gone = new Set<string>();
+      try {
+        if (target.kind === 'file') {
+          await apiDelete(`/api/projects/${projectId}/files/${target.file.id}`);
+          gone.add(target.file.id);
+        } else {
+          await apiDelete(
+            `/api/projects/${projectId}/folders?path=${encodeURIComponent(target.path)}`,
+          );
+          const prefix = `${target.path}/`;
+          for (const f of files) if (f.path.startsWith(prefix)) gone.add(f.id);
+        }
+      } catch (err) {
+        // `ConfirmDialog` ошибку не показывает — выносим её на панель, иначе
+        // отказ сервера выглядел бы как молча закрывшийся диалог.
+        setActionError(err instanceof ApiError ? err.body.error.message : t('actionFailed'));
+        return;
+      }
+      setRemoved((prev) => new Set([...prev, ...gone]));
+      // Удалённое выкидываем из истории и встаём на последнюю уцелевшую
+      // заметку; если не уцелело ничего, выбор сделает эффект первой загрузки.
+      const next = history.filter((e) => !gone.has(e.file.id));
+      setHistory(next);
+      setCursor(next.length - 1);
+      const last = next[next.length - 1];
+      if (last) applyEntry(last);
+      router.refresh();
+    },
+    [projectId, files, history, applyEntry, router, t],
+  );
+
+  // Папку создаём не именем, а путём — «/» в имени превратил бы одну заметку
+  // в две вложенные, чего пользователь не просил.
+  const validateName = useCallback(
+    (name: string): string | null => (name.includes('/') ? t('nameInvalid') : null),
+    [t],
+  );
+
+  const openDialog = useCallback((next: MenuDialog) => {
+    setActionError(null);
+    setMenuDialog(next);
+  }, []);
+
+  // Читателю (VIEWER) остаётся только скачивание: правку сервер всё равно
+  // отклонит, а пункты меню, которые всегда падают, — обман.
+  const treeActions = useMemo<FileTreeActions>(
+    () => ({
+      ...(canEdit
+        ? {
+            onCreateNote: (folder: string) => openDialog({ kind: 'create', folder }),
+            onRename: (target: MenuTarget) => openDialog({ kind: 'rename', target }),
+            onDelete: (target: MenuTarget) => openDialog({ kind: 'delete', target }),
+          }
+        : {}),
+      onDownloadFolder: downloadFolder,
+    }),
+    [canEdit, downloadFolder, openDialog],
+  );
+
+  const treeLabels = useMemo(
+    () => ({
+      createNote: t('menuCreateNote'),
+      rename: t('menuRename'),
+      delete: t('menuDelete'),
+      downloadFolder: t('downloadFolder'),
+    }),
+    [t],
+  );
+
+  const target = menuDialog && menuDialog.kind !== 'create' ? menuDialog.target : null;
+  const targetName =
+    target === null
+      ? ''
+      : target.kind === 'file'
+        ? baseName(target.file.path)
+        : baseName(target.path);
+  const renameTitle = target?.kind === 'folder' ? t('renameFolderTitle') : t('renameFileTitle');
+  // В дереве заметка подписана без `.md`, и в поле ввода она должна выглядеть
+  // так же — расширение вернётся при сохранении.
+  const renameInitial = target?.kind === 'file' ? targetName.replace(/\.md$/i, '') : targetName;
+  const deleteTitle =
+    target?.kind === 'folder'
+      ? t('deleteFolderTitle', { name: targetName })
+      : t('deleteFileTitle', { name: targetName });
+  const folderFileCount =
+    target?.kind === 'folder'
+      ? liveFiles.filter((f) => f.path.startsWith(`${target.path}/`)).length
+      : 0;
+  const deleteDescription =
+    target?.kind === 'folder'
+      ? t('deleteFolderDescription', { count: folderFileCount })
+      : t('deleteFileDescription');
+
   return (
     <div className="bg-card flex h-full overflow-hidden rounded-lg border">
       {/* Sidebar */}
@@ -299,10 +484,13 @@ export function NotesBrowser({
             expanded={effectiveExpanded}
             onToggleFolder={onToggleFolder}
             onSelectFile={(f) => openFile(f, null)}
-            onDownloadFolder={downloadFolder}
-            downloadLabel={t('downloadFolder')}
+            actions={treeActions}
+            labels={treeLabels}
           />
         </div>
+        {actionError && (
+          <p className="text-destructive border-t px-2 py-1.5 text-xs">{actionError}</p>
+        )}
       </aside>
 
       {/* Draggable divider — resize the file panel */}
@@ -392,7 +580,7 @@ export function NotesBrowser({
                   {isMarkdown(selected) ? (
                     <MarkdownView
                       content={content}
-                      files={files}
+                      files={liveFiles}
                       currentFile={selected}
                       projectId={projectId}
                       onNavigate={openFile}
@@ -423,6 +611,56 @@ export function NotesBrowser({
           </>
         )}
       </main>
+
+      {/* Диалоги контекстного меню — по одному открытому за раз. */}
+      <PromptDialog
+        open={menuDialog?.kind === 'create'}
+        onOpenChange={(open) => !open && setMenuDialog(null)}
+        title={t('createNoteTitle')}
+        description={
+          menuDialog?.kind === 'create' && menuDialog.folder
+            ? t('createNoteIn', { folder: menuDialog.folder })
+            : t('createNoteInRoot')
+        }
+        placeholder={t('namePlaceholder')}
+        confirmLabel={t('createConfirm')}
+        cancelLabel={t('cancel')}
+        validate={validateName}
+        onSubmit={(name) =>
+          menuDialog?.kind === 'create'
+            ? createNote(menuDialog.folder, name)
+            : Promise.resolve(undefined)
+        }
+      />
+
+      <PromptDialog
+        open={menuDialog?.kind === 'rename'}
+        onOpenChange={(open) => !open && setMenuDialog(null)}
+        title={renameTitle}
+        initialValue={renameInitial}
+        placeholder={t('namePlaceholder')}
+        confirmLabel={t('renameConfirm')}
+        cancelLabel={t('cancel')}
+        validate={validateName}
+        onSubmit={(name) =>
+          menuDialog?.kind === 'rename'
+            ? renameTarget(menuDialog.target, name)
+            : Promise.resolve(undefined)
+        }
+      />
+
+      <ConfirmDialog
+        open={menuDialog?.kind === 'delete'}
+        onOpenChange={(open) => !open && setMenuDialog(null)}
+        title={deleteTitle}
+        description={deleteDescription}
+        confirmLabel={t('deleteConfirm')}
+        cancelLabel={t('cancel')}
+        destructive
+        onConfirm={() =>
+          menuDialog?.kind === 'delete' ? deleteTarget(menuDialog.target) : undefined
+        }
+      />
     </div>
   );
 }
