@@ -17,6 +17,28 @@
 ${DOMAIN}${EXTRA_DOMAINS} {
     encode gzip zstd
 
+    # Security headers, applied to every response of this site (both the web
+    # process and the socket one). Set at the edge rather than in
+    # `next.config.ts` so the socket endpoints are covered too.
+    #
+    # HSTS deliberately has NO `preload` and a modest 30-day max-age: preload
+    # is effectively irreversible for months, and this list is easy to raise
+    # once it has proven itself. Caddy already 308s plain HTTP to HTTPS; HSTS
+    # closes the first-request window.
+    #
+    # Framing is denied twice on purpose: `frame-ancestors` is the modern rule,
+    # `X-Frame-Options` covers clients that ignore it. The CSP intentionally
+    # carries *only* `frame-ancestors` — a full policy needs per-request nonces
+    # for Next.js inline scripts, which is a separate piece of work.
+    header {
+        Strict-Transport-Security "max-age=2592000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Content-Security-Policy "frame-ancestors 'none'"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    }
+
     # Socket.IO traffic (websocket + long-polling) — proxy raw to the socket process.
     # Caddy auto-detects and upgrades the websocket connection.
     handle /socket.io/* {

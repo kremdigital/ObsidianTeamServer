@@ -1,6 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { createReadStream, type ReadStream } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { getProjectRoot, getStagingPath, getVersionPath, resolveProjectFile } from './paths';
 import { sha256OfBuffer, sha256OfFile } from './hash';
@@ -68,11 +78,38 @@ export async function getProjectFileStat(
   }
 }
 
+/**
+ * Снять опустевшие каталоги на пути файла, снизу вверх до корня проекта.
+ *
+ * Папки в вальте виртуальные — каталог существует ровно потому, что в нём
+ * лежит файл. Удалив или унеся последний файл, мы оставляли каталог-скелет:
+ * через API он невидим, но копится годами и мешает по-настоящему — файл с
+ * именем такого каталога потом не создать (`writeFile` на каталог даёт
+ * `EISDIR`).
+ *
+ * Работа необязательная: помеха — не ошибка. Любой сбой глотаем, включая
+ * `ENOTEMPTY` от параллельной записи в тот же каталог.
+ */
+async function pruneEmptyParents(projectId: string, vaultPath: string): Promise<void> {
+  const root = getProjectRoot(projectId);
+  let dir = dirname(resolveProjectFile(projectId, vaultPath));
+  // Корень проекта не трогаем: без него сломается и запись, и обход.
+  while (dir !== root && dir.startsWith(root + sep)) {
+    try {
+      await rmdir(dir);
+    } catch {
+      return;
+    }
+    dir = dirname(dir);
+  }
+}
+
 export async function deleteProjectFile(projectId: string, vaultPath: string): Promise<void> {
   const target = resolveProjectFile(projectId, vaultPath);
   await unlink(target).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== 'ENOENT') throw err;
   });
+  await pruneEmptyParents(projectId, vaultPath);
 }
 
 export async function moveProjectFile(
@@ -85,6 +122,9 @@ export async function moveProjectFile(
   if (src === dst) return;
   await mkdir(dirname(dst), { recursive: true });
   await rename(src, dst);
+  // Каталог, из которого файл ушёл, мог опустеть — снимаем его так же, как при
+  // удалении. Строго ПОСЛЕ переноса: до него каталог ещё занят.
+  await pruneEmptyParents(projectId, fromPath);
 }
 
 export async function listProjectFiles(projectId: string): Promise<ListedFile[]> {
