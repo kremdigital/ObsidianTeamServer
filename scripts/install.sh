@@ -263,7 +263,8 @@ clone_or_update_repo() {
 install_app() {
   log "Installing application dependencies..."
   pushd "${INSTALL_DIR}" >/dev/null
-  sudo -u "${SERVICE_USER}" pnpm install --frozen-lockfile
+  # CI=1 — см. комментарий в upgrade.sh: без него pnpm ждёт ответа на вопрос.
+  sudo -u "${SERVICE_USER}" env CI=1 pnpm install --frozen-lockfile
   popd >/dev/null
   ok "Dependencies installed"
 }

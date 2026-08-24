@@ -27,7 +27,10 @@ step "Fetching latest changes..."
 sudo -u "${SERVICE_USER}" -H bash -c "cd '${INSTALL_DIR}' && git fetch --all --tags && git pull --ff-only"
 
 step "Installing dependencies..."
-sudo -u "${SERVICE_USER}" -H bash -c "cd '${INSTALL_DIR}' && pnpm install --frozen-lockfile"
+# CI=1 — иначе pnpm в неинтерактивной сессии останавливается на вопросе об
+# удалении node_modules и апгрейд подвисает без вывода. `sudo` сбрасывает
+# окружение, поэтому переменную задаём внутри, а не снаружи скрипта.
+sudo -u "${SERVICE_USER}" -H bash -c "cd '${INSTALL_DIR}' && CI=1 pnpm install --frozen-lockfile"
 
 step "Running migrations..."
 sudo -u "${SERVICE_USER}" -H bash -c "cd '${INSTALL_DIR}' && pnpm exec prisma generate && pnpm exec prisma migrate deploy"
